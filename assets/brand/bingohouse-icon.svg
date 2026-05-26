@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Bingo House app icon</title>
+  <desc id="desc">Bingo House gold house and bingo ball icon on dark background.</desc>
+  <defs>
+    <linearGradient id="bg" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#101827"/>
+      <stop offset="0.52" stop-color="#020617"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="256" y1="168" x2="804" y2="840" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fde68a"/>
+      <stop offset="0.45" stop-color="#f59e0b"/>
+      <stop offset="1" stop-color="#b45309"/>
+    </linearGradient>
+    <linearGradient id="ball" x1="310" y1="354" x2="710" y2="756" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.48" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#cbd5e1"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="30" stdDeviation="36" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
+  <path d="M512 142 842 386v416a72 72 0 0 1-72 72H254a72 72 0 0 1-72-72V386L512 142Z" fill="#07111f" stroke="url(#gold)" stroke-width="48" stroke-linejoin="round" filter="url(#softShadow)"/>
+  <path d="M164 410 512 154l348 256" fill="none" stroke="url(#gold)" stroke-width="74" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="512" cy="560" r="220" fill="url(#ball)" stroke="#f59e0b" stroke-width="26"/>
+  <path d="M348 560h328M512 396v328M396 424c-44 84-44 188 0 272M628 424c44 84 44 188 0 272" fill="none" stroke="#0f172a" stroke-width="28" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="512" cy="560" r="86" fill="#0f172a"/>
+  <text x="512" y="602" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="104" font-weight="900" fill="#f59e0b">BH</text>
+  <path d="M330 826h364" stroke="url(#gold)" stroke-width="34" stroke-linecap="round"/>
+</svg>

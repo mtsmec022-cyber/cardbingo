@@ -1,0 +1,13 @@
+{
+  "id": "com.bingohouse.app",
+  "version": "1.0.0",
+  "vendor": "Bingo House",
+  "type": "web",
+  "main": "index.html",
+  "title": "Bingo House",
+  "appDescription": "Sorteador de bingo otimizado para TV LG webOS.",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "resolution": "1920x1080",
+  "uiRevision": 2
+}

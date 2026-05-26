@@ -1,0 +1,23 @@
+{
+  "name": "Bingo House",
+  "short_name": "BingoHouse",
+  "description": "Sorteador de bingo otimizado para TV LG webOS.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

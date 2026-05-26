@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: bingohouse
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm run serve
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
