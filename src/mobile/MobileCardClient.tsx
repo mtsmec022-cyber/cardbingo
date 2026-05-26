@@ -15,6 +15,14 @@ const createClientId = () => {
 };
 const createCardId = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 const MOBILE_SESSION_KEY = 'bingohouse-mobile-session';
+const isValidCardNumbers = (numbers: unknown): numbers is number[] => Array.isArray(numbers) && numbers.length === 25;
+const normalizeCard = (card?: { id?: string; numbers?: number[] } | null) => {
+  if (!card?.id || !isValidCardNumbers(card.numbers)) return null;
+  return {
+    id: String(card.id),
+    numbers: card.numbers.map(Number).slice(0, 25),
+  };
+};
 
 const generateCard75 = () => {
   const ranges = [
@@ -45,8 +53,9 @@ const generateCard75 = () => {
 const createCardOption = () => ({ id: createCardId(), numbers: generateCard75() });
 const buildCardOptionsFromSelected = (selected?: { id?: string; numbers?: number[] } | null) => {
   const base = Array.from({ length: 11 }, createCardOption);
-  if (!selected?.id || !Array.isArray(selected.numbers) || selected.numbers.length !== 25) return Array.from({ length: 12 }, createCardOption);
-  return [{ id: selected.id, numbers: selected.numbers.map(Number) }, ...base];
+  const normalizedCard = normalizeCard(selected);
+  if (!normalizedCard) return Array.from({ length: 12 }, createCardOption);
+  return [normalizedCard, ...base];
 };
 const readStoredSession = () => {
   try {
@@ -115,6 +124,24 @@ export default function MobileCardClient() {
   const clearStoredSession = useCallback(() => {
     storedSessionRef.current = null;
     localStorage.removeItem(MOBILE_SESSION_KEY);
+  }, []);
+
+  const restoreSelectedCard = useCallback((card?: { id?: string; numbers?: number[] } | null) => {
+    const normalizedCard = normalizeCard(card);
+    if (!normalizedCard) return null;
+
+    setCardOptions((currentOptions) => {
+      const existingIndex = currentOptions.findIndex((option) => option.id === normalizedCard.id);
+      if (existingIndex >= 0) {
+        setCardIndex(existingIndex);
+        return currentOptions;
+      }
+
+      setCardIndex(0);
+      return buildCardOptionsFromSelected(normalizedCard);
+    });
+
+    return normalizedCard;
   }, []);
 
   const persistSession = useCallback((overrides?: Partial<{
@@ -228,14 +255,11 @@ export default function MobileCardClient() {
     }
 
     const storedSession = storedSessionRef.current;
-    const joiningCard = storedSession?.roomCode === normalized && storedSession.selectedCard?.id && Array.isArray(storedSession.selectedCard?.numbers)
-      ? { id: String(storedSession.selectedCard.id), numbers: storedSession.selectedCard.numbers.map(Number).slice(0, 25) }
-      : selectedCard;
+    const joiningCard = storedSession?.roomCode === normalized
+      ? normalizeCard(storedSession.selectedCard)
+      : normalizeCard(selectedCard);
 
-    if (joiningCard?.id && Array.isArray(joiningCard.numbers)) {
-      setCardOptions(buildCardOptionsFromSelected(joiningCard));
-      setCardIndex(0);
-    }
+    if (joiningCard) restoreSelectedCard(joiningCard);
 
     localStorage.setItem('bingohouse-player-name', cleanName);
     setPlayerName(cleanName);
@@ -275,14 +299,12 @@ export default function MobileCardClient() {
       }
       if (data.type === 'player-ack' && data.room === normalized) {
         const player = data.player;
-        if (player?.cardId && Array.isArray(player.card) && player.card.length === 25) {
-          const restoredCard = { id: String(player.cardId), numbers: player.card.map(Number).slice(0, 25) };
-          setCardOptions(buildCardOptionsFromSelected(restoredCard));
-          setCardIndex(0);
+        if (player?.cardId && isValidCardNumbers(player.card)) {
+          const restoredCard = restoreSelectedCard({ id: String(player.cardId), numbers: player.card.map(Number).slice(0, 25) });
           persistSession({
             roomCode: normalized,
             playerName: cleanName,
-            selectedCard: restoredCard,
+            selectedCard: restoredCard || undefined,
             isReady: Boolean(player.ready),
             gameStarted: Boolean(data.gameActive),
           });
@@ -350,7 +372,7 @@ export default function MobileCardClient() {
       }
       returnToHomeWithModal('Conexão perdida', 'Você foi desconectado da sala. Verifique a TV e entre novamente.');
     };
-  }, [checkRoomAvailability, closePlayerSocket, persistSession, playerName, returnToHomeWithModal, selectedCard, webSocketUrl]);
+  }, [checkRoomAvailability, closePlayerSocket, persistSession, playerName, restoreSelectedCard, returnToHomeWithModal, selectedCard, webSocketUrl]);
 
   useEffect(() => {
     localStorage.setItem('bingohouse-player-id', playerIdRef.current);
