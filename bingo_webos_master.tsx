@@ -275,6 +275,7 @@ export default function BingoWebOSMaster() {
   const [validationOverlay, setValidationOverlay] = useState(null);
   const [bingoWinner, setBingoWinner] = useState(null);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [audioQueueBusy, setAudioQueueBusy] = useState(false);
   
   const autoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -296,6 +297,8 @@ export default function BingoWebOSMaster() {
   const hostSocketRef = useRef<WebSocket | null>(null);
   const bingoClaimHandlerRef = useRef(null);
   const gamepadPressedRef = useRef<Record<string, boolean>>({});
+  const audioQueueDepthRef = useRef(0);
+  const shuttingDownHostRef = useRef(false);
   const [manualDrawCoolingDown, setManualDrawCoolingDown] = useState(false);
 
   const currentGameConfig = settings.gameType === '75' ? GAME_TYPES.BINGO_75 : GAME_TYPES.BINGO_90;
@@ -313,8 +316,11 @@ export default function BingoWebOSMaster() {
     }))
   ), []);
   const boardNumbers90 = useMemo(() => Array.from({ length: 90 }, (_, i) => i + 1), []);
+  const connectedOnlinePlayers = useMemo(() => (
+    onlinePlayers.filter(player => player.connected !== false)
+  ), [onlinePlayers]);
   const onlineRanking = useMemo(() => (
-    onlinePlayers
+    connectedOnlinePlayers
       .map((player) => ({
         ...player,
         progress: cardProgress75(player.card || [], drawnBallSet, patternIndex),
@@ -322,11 +328,11 @@ export default function BingoWebOSMaster() {
       .filter(player => player.progress.needed > 0)
       .sort((a, b) => a.progress.missing - b.progress.missing || b.progress.matched - a.progress.matched)
       .slice(0, 4)
-  ), [drawnBallSet, onlinePlayers, patternIndex]);
+  ), [connectedOnlinePlayers, drawnBallSet, patternIndex]);
   const onlineReadyCount = useMemo(() => (
-    onlinePlayers.filter(player => player.ready).length
-  ), [onlinePlayers]);
-  const canStartOnlineGame = onlinePlayers.length >= 2 && onlineReadyCount === onlinePlayers.length;
+    connectedOnlinePlayers.filter(player => player.ready).length
+  ), [connectedOnlinePlayers]);
+  const canStartOnlineGame = connectedOnlinePlayers.length >= 2 && onlineReadyCount === connectedOnlinePlayers.length;
   const mobileCardUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
     const url = new URL(getOnlineOrigin());
@@ -352,10 +358,32 @@ export default function BingoWebOSMaster() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!webSocketUrl || !isValidRoomCode(onlineRoomCode)) return;
+  const closeHostSession = useCallback((notifyPlayers = false) => {
+    const socket = hostSocketRef.current;
+    hostSocketRef.current = null;
+    if (!socket) return;
+    shuttingDownHostRef.current = true;
+    if (notifyPlayers && socket.readyState === WebSocket.OPEN && isValidRoomCode(onlineRoomCode)) {
+      socket.send(JSON.stringify({ type: 'host-leave', room: onlineRoomCode }));
+    }
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    socket.close();
+    setOnlineConnected(false);
+    setOnlinePlayers([]);
+  }, [onlineRoomCode]);
 
-    hostSocketRef.current?.close();
+  useEffect(() => {
+    const shouldKeepRoomOpen = currentScreen === 'onlineCards' || (currentScreen === 'game' && onlineGameMode);
+    if (!shouldKeepRoomOpen || !webSocketUrl || !isValidRoomCode(onlineRoomCode)) {
+      closeHostSession(true);
+      return;
+    }
+
+    closeHostSession(false);
+    shuttingDownHostRef.current = false;
     const socket = new WebSocket(webSocketUrl);
     hostSocketRef.current = socket;
 
@@ -378,14 +406,19 @@ export default function BingoWebOSMaster() {
       }
     };
 
-    socket.onclose = () => setOnlineConnected(false);
+    socket.onclose = () => {
+      if (shuttingDownHostRef.current) {
+        shuttingDownHostRef.current = false;
+        return;
+      }
+      setOnlineConnected(false);
+    };
     socket.onerror = () => setOnlineConnected(false);
 
     return () => {
-      socket.close();
-      if (hostSocketRef.current === socket) hostSocketRef.current = null;
+      if (hostSocketRef.current === socket) closeHostSession(true);
     };
-  }, [onlineRoomCode, webSocketUrl]);
+  }, [closeHostSession, currentScreen, onlineGameMode, onlineRoomCode, webSocketUrl]);
 
   useEffect(() => {
     if (!mobileCardUrl) return;
@@ -564,12 +597,13 @@ export default function BingoWebOSMaster() {
 
   const requestExitApp = useCallback(() => {
     setShowExitConfirm(false);
+    closeHostSession(true);
     try {
       window.close();
     } catch {
       undefined;
     }
-  }, []);
+  }, [closeHostSession]);
 
   const getBallInfo = (num) => {
     if (!num) return null;
@@ -612,6 +646,16 @@ export default function BingoWebOSMaster() {
     }));
   }, [onlineRoomCode]);
 
+  const publishOnlineGameReset = useCallback(() => {
+    const socket = hostSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !isValidRoomCode(onlineRoomCode)) return;
+
+    socket.send(JSON.stringify({
+      type: 'host-game-reset',
+      room: onlineRoomCode,
+    }));
+  }, [onlineRoomCode]);
+
   const lockManualDraw = useCallback(() => {
     if (manualDrawCooldownTimerRef.current) clearTimeout(manualDrawCooldownTimerRef.current);
     setManualDrawCoolingDown(true);
@@ -623,6 +667,8 @@ export default function BingoWebOSMaster() {
 
   const interruptActiveVoice = useCallback(() => {
     audioQueueRef.current = Promise.resolve();
+    audioQueueDepthRef.current = 0;
+    setAudioQueueBusy(false);
     activeAudioRef.current?.pause();
     activeAudioRef.current = null;
     setIsVoicePlaying(false);
@@ -704,9 +750,16 @@ export default function BingoWebOSMaster() {
   }, [settings.soundEnabled, warmAudioSource]);
 
   const enqueueAudio = useCallback((task: () => Promise<unknown> | unknown) => {
+    audioQueueDepthRef.current += 1;
+    setAudioQueueBusy(true);
+
     audioQueueRef.current = audioQueueRef.current
       .catch(() => undefined)
       .then(() => task())
+      .finally(() => {
+        audioQueueDepthRef.current = Math.max(0, audioQueueDepthRef.current - 1);
+        if (audioQueueDepthRef.current === 0) setAudioQueueBusy(false);
+      })
       .catch(() => undefined);
 
     return audioQueueRef.current;
@@ -1088,13 +1141,15 @@ export default function BingoWebOSMaster() {
   }, [drawnBalls.length, executeInitialDraw, isDrawing, playSfxWithFallback, playVoicePhrase, settings.soundEnabled, startAnnouncement, startCountdown]);
 
   useEffect(() => {
-    if (isPlaying && !isDrawing && !isVoicePlaying && drawnBalls.length < TOTAL_BALLS) {
+    if (autoPlayTimerRef.current) clearTimeout(autoPlayTimerRef.current);
+
+    if (isPlaying && !isDrawing && !isVoicePlaying && !audioQueueBusy && drawnBalls.length < TOTAL_BALLS) {
       autoPlayTimerRef.current = setTimeout(() => {
         executeDraw();
       }, settings.autoSpeed);
     }
     return () => clearTimeout(autoPlayTimerRef.current);
-  }, [isPlaying, isDrawing, isVoicePlaying, drawnBalls.length, TOTAL_BALLS, settings.autoSpeed, executeDraw]);
+  }, [isPlaying, isDrawing, isVoicePlaying, audioQueueBusy, drawnBalls.length, TOTAL_BALLS, settings.autoSpeed, executeDraw]);
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return;
@@ -1155,6 +1210,7 @@ export default function BingoWebOSMaster() {
     if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
     if (announcementTimerRef.current) clearTimeout(announcementTimerRef.current);
     activeAudioRef.current?.pause();
+    if (onlineGameMode) publishOnlineGameReset();
     countdownActiveRef.current = false;
     drawInProgressRef.current = false;
     setPatternIndex(0);
@@ -1180,16 +1236,17 @@ export default function BingoWebOSMaster() {
     setManualDrawCoolingDown(false);
     if (manualDrawCooldownTimerRef.current) clearTimeout(manualDrawCooldownTimerRef.current);
     manualDrawCooldownTimerRef.current = null;
+    if (onlineGameMode) publishOnlineGameReset();
     setShowBingoCelebration(false);
     setBingoWinner(null);
     setCurrentScreen('menu');
-  }, []);
+  }, [onlineGameMode, publishOnlineGameReset]);
 
   const renewOnlineRoom = useCallback(() => {
-    hostSocketRef.current?.close();
+    closeHostSession(true);
     setOnlinePlayers([]);
     setOnlineRoomCode(generateRoomCode());
-  }, []);
+  }, [closeHostSession]);
 
   // ==========================================
   // RENDERIZADORES DE ECRÃ
@@ -1227,6 +1284,7 @@ export default function BingoWebOSMaster() {
               if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
               if (announcementTimerRef.current) clearTimeout(announcementTimerRef.current);
               activeAudioRef.current?.pause();
+              if (onlineGameMode) publishOnlineGameReset();
               countdownActiveRef.current = false;
               drawInProgressRef.current = false;
               setOnlineGameMode(false); setStartCountdown(null); setStartAnnouncement(false); setIsVoicePlaying(false); setDrawnBalls([]); setDisplayNumber(null); setCurrentScreen('game');
@@ -1447,15 +1505,15 @@ export default function BingoWebOSMaster() {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 flex-1 flex flex-col min-h-0">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-3xl font-black text-white uppercase tracking-widest">Jogadores</h3>
-              <div className="text-5xl font-black text-amber-500">{onlinePlayers.length}</div>
-            </div>
-            <div className="grid grid-cols-2 gap-3 flex-1 overflow-hidden content-start">
-              {onlinePlayers.length === 0 && (
+                <div className="text-5xl font-black text-amber-500">{connectedOnlinePlayers.length}</div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 flex-1 overflow-hidden content-start">
+              {connectedOnlinePlayers.length === 0 && (
                 <div className="col-span-2 h-28 bg-black/40 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-500 font-black uppercase tracking-widest">
                   Aguardando jogadores
                 </div>
               )}
-              {onlinePlayers.slice(0, 8).map((player, index) => (
+              {connectedOnlinePlayers.slice(0, 8).map((player, index) => (
                 <div key={player.id || index} className="h-20 bg-black/40 border border-slate-800 rounded-2xl flex items-center gap-4 px-5">
                   <div className={`w-10 h-10 rounded-full text-white flex items-center justify-center font-black ${player.ready ? 'bg-emerald-600' : 'bg-slate-700'}`}>{index + 1}</div>
                   <div className="min-w-0 flex-1">
@@ -1480,7 +1538,7 @@ export default function BingoWebOSMaster() {
               disabled={!canStartOnlineGame}
               className="mt-6 h-20 rounded-2xl bg-amber-600 text-black font-black text-3xl uppercase tracking-widest disabled:opacity-40 focus:outline-none focus:ring-8 focus:ring-white transition-all"
             >
-              {canStartOnlineGame ? 'Jogar' : onlinePlayers.length < 2 ? 'Aguardando 2 jogadores' : `Prontos ${onlineReadyCount}/${onlinePlayers.length}`}
+              {canStartOnlineGame ? 'Jogar' : connectedOnlinePlayers.length < 2 ? 'Aguardando 2 jogadores' : `Prontos ${onlineReadyCount}/${connectedOnlinePlayers.length}`}
             </button>
           </div>
         </div>

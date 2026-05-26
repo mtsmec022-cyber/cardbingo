@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './styles.css';
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
-const MIN_BOOT_LOADING_MS = 8000;
+const MIN_BOOT_LOADING_MS = 1400;
 
 const LOADING_MESSAGES = [
   {
@@ -89,6 +89,32 @@ function BootLoadingScreen() {
   const activeMessage = React.useMemo(() => {
     const pool = [...LOADING_MESSAGES];
     return pool[Math.floor(Math.random() * pool.length)];
+  }, []);
+
+  React.useEffect(() => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        const context = new AudioContextClass();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const now = context.currentTime;
+
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(520, now);
+        oscillator.frequency.exponentialRampToValueAtTime(760, now + 0.18);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.035, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(now);
+        oscillator.stop(now + 0.26);
+        window.setTimeout(() => context.close().catch(() => undefined), 320);
+      }
+    } catch {
+      undefined;
+    }
   }, []);
 
   React.useEffect(() => {

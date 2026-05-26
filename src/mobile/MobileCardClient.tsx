@@ -14,6 +14,7 @@ const createClientId = () => {
   return `${timestamp}${random}`.slice(0, 16);
 };
 const createCardId = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+const MOBILE_SESSION_KEY = 'bingohouse-mobile-session';
 
 const generateCard75 = () => {
   const ranges = [
@@ -42,6 +43,22 @@ const generateCard75 = () => {
 };
 
 const createCardOption = () => ({ id: createCardId(), numbers: generateCard75() });
+const buildCardOptionsFromSelected = (selected?: { id?: string; numbers?: number[] } | null) => {
+  const base = Array.from({ length: 11 }, createCardOption);
+  if (!selected?.id || !Array.isArray(selected.numbers) || selected.numbers.length !== 25) return Array.from({ length: 12 }, createCardOption);
+  return [{ id: selected.id, numbers: selected.numbers.map(Number) }, ...base];
+};
+const readStoredSession = () => {
+  try {
+    const raw = localStorage.getItem(MOBILE_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !isValidRoomCode(normalizeRoomCode(parsed.roomCode || ''))) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
 const isStandaloneApp = () => (
   window.matchMedia?.('(display-mode: standalone)').matches
   || (window.navigator as any).standalone === true
@@ -63,14 +80,15 @@ const getOnlineWebSocketUrl = () => {
 };
 
 export default function MobileCardClient() {
+  const storedSessionRef = useRef(readStoredSession());
   const [screen, setScreen] = useState<'home' | 'select' | 'card'>('home');
-  const [roomCode, setRoomCode] = useState('');
-  const [joinCode, setJoinCode] = useState('');
+  const [roomCode, setRoomCode] = useState(storedSessionRef.current?.roomCode || '');
+  const [joinCode, setJoinCode] = useState(storedSessionRef.current?.roomCode || '');
   const [playerName, setPlayerName] = useState(localStorage.getItem('bingohouse-player-name') || '');
   const [editingName, setEditingName] = useState(!localStorage.getItem('bingohouse-player-name'));
-  const [cardOptions, setCardOptions] = useState(() => Array.from({ length: 12 }, createCardOption));
+  const [cardOptions, setCardOptions] = useState(() => buildCardOptionsFromSelected(storedSessionRef.current?.selectedCard));
   const [cardIndex, setCardIndex] = useState(0);
-  const [markedNumbers, setMarkedNumbers] = useState(() => new Set([0]));
+  const [markedNumbers, setMarkedNumbers] = useState(() => new Set(Array.isArray(storedSessionRef.current?.markedNumbers) ? [0, ...storedSessionRef.current.markedNumbers] : [0]));
   const [scannerActive, setScannerActive] = useState(false);
   const [message, setMessage] = useState('');
   const [disconnectModal, setDisconnectModal] = useState<{ title: string; message: string } | null>(null);
@@ -93,6 +111,35 @@ export default function MobileCardClient() {
   const roomStatusUrl = useMemo(() => {
     return `${getOnlineOrigin()}/api/room/`;
   }, []);
+
+  const clearStoredSession = useCallback(() => {
+    storedSessionRef.current = null;
+    localStorage.removeItem(MOBILE_SESSION_KEY);
+  }, []);
+
+  const persistSession = useCallback((overrides?: Partial<{
+    roomCode: string;
+    playerName: string;
+    selectedCard: { id: string; numbers: number[] };
+    markedNumbers: number[];
+    isReady: boolean;
+    gameStarted: boolean;
+  }>) => {
+    const payload = {
+      roomCode,
+      playerName,
+      selectedCard: {
+        id: selectedCard?.id,
+        numbers: selectedCard?.numbers,
+      },
+      markedNumbers: Array.from(markedNumbers).filter((value) => value !== 0),
+      isReady,
+      gameStarted,
+      ...overrides,
+    };
+    storedSessionRef.current = payload;
+    localStorage.setItem(MOBILE_SESSION_KEY, JSON.stringify(payload));
+  }, [gameStarted, isReady, markedNumbers, playerName, roomCode, selectedCard]);
 
   const stopScanner = useCallback(() => {
     if (scannerTimerRef.current) clearInterval(scannerTimerRef.current);
@@ -123,13 +170,15 @@ export default function MobileCardClient() {
     setIsReady(false);
     setGameStarted(false);
     setMessage('');
+    clearStoredSession();
     setDisconnectModal({ title, message: modalMessage });
-  }, [stopScanner]);
+  }, [clearStoredSession, stopScanner]);
 
   const leaveRoom = useCallback(() => {
     closePlayerSocket();
-    returnToHomeWithModal('Você saiu da sala', 'A conexão com a sala foi encerrada.');
-  }, [closePlayerSocket, returnToHomeWithModal]);
+    setScreen('home');
+    setMessage('Cartela pausada. Volte usando a mesma sala para retomar.');
+  }, [closePlayerSocket]);
 
   const checkRoomAvailability = useCallback(async (room: string) => {
     const normalized = normalizeRoomCode(room);
@@ -145,6 +194,10 @@ export default function MobileCardClient() {
       }
       if (!data.online) {
         return { ok: false, reason: 'Esta sala está offline no momento. Verifique a TV.' };
+      }
+      const isRejoin = storedSessionRef.current?.roomCode === normalized;
+      if (data.gameActive && !isRejoin) {
+        return { ok: false, reason: 'A sala já está jogando. Só quem já entrou pode voltar para a cartela atual.' };
       }
       return { ok: true, room: normalized };
     } catch {
@@ -174,6 +227,16 @@ export default function MobileCardClient() {
       return;
     }
 
+    const storedSession = storedSessionRef.current;
+    const joiningCard = storedSession?.roomCode === normalized && storedSession.selectedCard?.id && Array.isArray(storedSession.selectedCard?.numbers)
+      ? { id: String(storedSession.selectedCard.id), numbers: storedSession.selectedCard.numbers.map(Number).slice(0, 25) }
+      : selectedCard;
+
+    if (joiningCard?.id && Array.isArray(joiningCard.numbers)) {
+      setCardOptions(buildCardOptionsFromSelected(joiningCard));
+      setCardIndex(0);
+    }
+
     localStorage.setItem('bingohouse-player-name', cleanName);
     setPlayerName(cleanName);
     setEditingName(false);
@@ -181,9 +244,9 @@ export default function MobileCardClient() {
     setDisconnectModal(null);
     setMessage('');
     setCurrentBall(null);
-    setMarkedNumbers(new Set([0]));
-    setIsReady(false);
-    setGameStarted(false);
+    setMarkedNumbers(new Set(Array.isArray(storedSession?.markedNumbers) ? [0, ...storedSession.markedNumbers] : [0]));
+    setIsReady(Boolean(storedSession?.isReady));
+    setGameStarted(Boolean(storedSession?.gameStarted));
     setScreen('select');
 
     closePlayerSocket();
@@ -197,8 +260,8 @@ export default function MobileCardClient() {
         room: normalized,
         playerId: playerIdRef.current,
         name: cleanName,
-        cardId: selectedCard.id,
-        card: selectedCard.numbers,
+        cardId: joiningCard.id,
+        card: joiningCard.numbers,
       }));
     };
     socket.onmessage = (event) => {
@@ -211,6 +274,29 @@ export default function MobileCardClient() {
         return;
       }
       if (data.type === 'player-ack' && data.room === normalized) {
+        const player = data.player;
+        if (player?.cardId && Array.isArray(player.card) && player.card.length === 25) {
+          const restoredCard = { id: String(player.cardId), numbers: player.card.map(Number).slice(0, 25) };
+          setCardOptions(buildCardOptionsFromSelected(restoredCard));
+          setCardIndex(0);
+          persistSession({
+            roomCode: normalized,
+            playerName: cleanName,
+            selectedCard: restoredCard,
+            isReady: Boolean(player.ready),
+            gameStarted: Boolean(data.gameActive),
+          });
+        }
+        setIsReady(Boolean(player?.ready));
+        setGameStarted(Boolean(data.gameActive));
+        if (data.currentBall && Number.isFinite(Number(data.currentBall.number))) {
+          setCurrentBall({
+            number: Number(data.currentBall.number),
+            letter: data.currentBall.letter,
+            totalDrawn: Number(data.currentBall.totalDrawn || 0),
+          });
+        }
+        setScreen(player?.ready || data.gameActive ? 'card' : 'select');
         setMessage(`Conectado à sala ${normalized}`);
         return;
       }
@@ -229,13 +315,29 @@ export default function MobileCardClient() {
           letter: data.letter,
           totalDrawn: Number(data.totalDrawn || 0),
         });
+        persistSession({ gameStarted: true, roomCode: normalized, playerName: cleanName });
       }
       if (data.type === 'bingo-result' && data.room === normalized && data.playerId === playerIdRef.current) {
         setMessage(data.valid ? 'BINGO confirmado!' : 'BINGO inválido. Continue jogando.');
       }
       if (data.type === 'game-start' && data.room === normalized) {
         setGameStarted(true);
+        setScreen('card');
+        persistSession({ isReady: true, gameStarted: true, roomCode: normalized, playerName: cleanName });
         setMessage('Jogo iniciado. Boa sorte!');
+      }
+      if (data.type === 'game-reset' && data.room === normalized) {
+        setCurrentBall(null);
+        setMarkedNumbers(new Set([0]));
+        setGameStarted(false);
+        setIsReady(false);
+        setScreen('select');
+        persistSession({ isReady: false, gameStarted: false, markedNumbers: [] });
+        setMessage('A TV reiniciou a rodada. Escolha ou confirme sua cartela.');
+      }
+      if (data.type === 'session-ended' && data.room === normalized) {
+        closePlayerSocket();
+        returnToHomeWithModal('Sessão encerrada', 'A TV encerrou esta sala. Entre novamente quando uma nova sessão estiver aberta.');
       }
     };
     socket.onerror = () => setMessage('Não foi possível conectar à sala.');
@@ -248,7 +350,7 @@ export default function MobileCardClient() {
       }
       returnToHomeWithModal('Conexão perdida', 'Você foi desconectado da sala. Verifique a TV e entre novamente.');
     };
-  }, [checkRoomAvailability, closePlayerSocket, playerName, returnToHomeWithModal, selectedCard, webSocketUrl]);
+  }, [checkRoomAvailability, closePlayerSocket, persistSession, playerName, returnToHomeWithModal, selectedCard, webSocketUrl]);
 
   useEffect(() => {
     localStorage.setItem('bingohouse-player-id', playerIdRef.current);
@@ -256,6 +358,8 @@ export default function MobileCardClient() {
     const room = normalizeRoomCode(params.get('sala') || '');
     if (isValidRoomCode(room)) {
       enterRoom(room);
+    } else if (isValidRoomCode(storedSessionRef.current?.roomCode || '')) {
+      enterRoom(storedSessionRef.current.roomCode);
     } else if (params.get('sala')) {
       setMessage('Código inválido.');
     }
@@ -265,6 +369,11 @@ export default function MobileCardClient() {
       closePlayerSocket();
     };
   }, []);
+
+  useEffect(() => {
+    if (!roomCode || !selectedCard?.id || !Array.isArray(selectedCard?.numbers)) return;
+    persistSession();
+  }, [gameStarted, isReady, markedNumbers, persistSession, roomCode, selectedCard]);
 
   useEffect(() => {
     if (isStandaloneApp() || localStorage.getItem('bingohouse-install-dismissed') === '1') return;
@@ -315,6 +424,11 @@ export default function MobileCardClient() {
     const nextCard = cardOptions[normalizedIndex];
     setCardIndex(normalizedIndex);
     setMarkedNumbers(new Set([0]));
+    persistSession({
+      selectedCard: { id: nextCard.id, numbers: nextCard.numbers },
+      markedNumbers: [],
+      isReady: false,
+    });
 
     const socket = playerSocketRef.current;
     if (socket?.readyState === WebSocket.OPEN && isValidRoomCode(roomCode)) {
@@ -339,6 +453,13 @@ export default function MobileCardClient() {
     setIsReady(true);
     setMessage('Pronto. Aguardando a TV iniciar.');
     setScreen('card');
+    persistSession({
+      roomCode,
+      playerName: playerName.trim().slice(0, 24),
+      selectedCard: { id: selectedCard.id, numbers: selectedCard.numbers },
+      isReady: true,
+      gameStarted,
+    });
     socket.send(JSON.stringify({
       type: 'player-ready',
       room: roomCode,
@@ -347,7 +468,7 @@ export default function MobileCardClient() {
       cardId: selectedCard.id,
       card: selectedCard.numbers,
     }));
-  }, [playerName, roomCode, selectedCard]);
+  }, [gameStarted, persistSession, playerName, roomCode, selectedCard]);
 
   const callBingo = useCallback(() => {
     const socket = playerSocketRef.current;

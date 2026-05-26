@@ -31,7 +31,9 @@ const buildRoomStatus = (code) => {
     valid: /^[A-Z0-9]{6}$/.test(roomCode),
     online: Boolean(room && room.hosts.size > 0),
     hostCount: room?.hosts.size || 0,
-    playerCount: room?.players.size || 0,
+    playerCount: room ? Array.from(room.players.values()).filter((player) => player.connected !== false).length : 0,
+    gameActive: Boolean(room?.gameActive),
+    currentBall: room?.currentBall || null,
   };
 };
 
@@ -85,25 +87,54 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 const getRoom = (code) => {
   const roomCode = normalizeRoomCode(code);
   if (!rooms.has(roomCode)) {
-    rooms.set(roomCode, { hosts: new Set(), players: new Map() });
+    rooms.set(roomCode, {
+      hosts: new Set(),
+      players: new Map(),
+      gameActive: false,
+      currentBall: null,
+      lastHeartbeatAt: Date.now(),
+    });
   }
   return rooms.get(roomCode);
+};
+
+const getPlayerEntries = (room) => Array.from(room.players.entries());
+
+const serializePlayer = (player) => ({
+  id: player.id,
+  name: player.name,
+  cardId: player.cardId,
+  card: player.card,
+  ready: Boolean(player.ready),
+  connected: Boolean(player.connected),
+  joinedAt: player.joinedAt,
+  lastSeenAt: player.lastSeenAt,
+});
+
+const findPlayerEntryById = (room, playerId) => (
+  getPlayerEntries(room).find(([, player]) => player.id === playerId)
+);
+
+const sendJson = (socket, payload) => {
+  if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(payload));
 };
 
 const broadcastRoom = (code) => {
   const room = rooms.get(code);
   if (!room) return;
 
-  const payload = JSON.stringify({
+  const payload = {
     type: 'room-update',
     room: code,
-    players: Array.from(room.players.values()),
-    playerCount: room.players.size,
+    players: Array.from(room.players.values()).map(serializePlayer),
+    playerCount: Array.from(room.players.values()).filter((player) => player.connected !== false).length,
     hostCount: room.hosts.size,
-  });
+    gameActive: Boolean(room.gameActive),
+    currentBall: room.currentBall,
+  };
 
   for (const client of [...room.hosts, ...room.players.keys()]) {
-    if (client.readyState === client.OPEN) client.send(payload);
+    sendJson(client, payload);
   }
 };
 
@@ -126,30 +157,88 @@ wss.on('connection', (socket) => {
     if (message.type === 'host-join') {
       socket.meta = { role: 'host', room: roomCode };
       room.hosts.add(socket);
-      if (socket.readyState === socket.OPEN) {
-        socket.send(JSON.stringify({ type: 'host-ack', ...buildRoomStatus(roomCode) }));
-      }
+      room.lastHeartbeatAt = Date.now();
+      sendJson(socket, {
+        type: 'host-ack',
+        ...buildRoomStatus(roomCode),
+        gameActive: Boolean(room.gameActive),
+        currentBall: room.currentBall,
+      });
       broadcastRoom(roomCode);
       return;
     }
 
+    if (message.type === 'host-leave') {
+      for (const playerSocket of room.players.keys()) {
+        sendJson(playerSocket, {
+          type: 'session-ended',
+          room: roomCode,
+        });
+      }
+      room.hosts.delete(socket);
+      rooms.delete(roomCode);
+      return;
+    }
+
     if (message.type === 'player-join') {
+      const playerId = String(message.playerId || crypto.randomUUID());
+      const existingEntry = findPlayerEntryById(room, playerId);
+      const existingPlayer = existingEntry?.[1] || null;
+
       if (room.hosts.size <= 0) {
-        if (socket.readyState === socket.OPEN) {
-          socket.send(JSON.stringify({ type: 'room-unavailable', ...buildRoomStatus(roomCode) }));
-        }
+        sendJson(socket, { type: 'room-unavailable', ...buildRoomStatus(roomCode), reason: 'host-offline' });
         return;
       }
 
-      const playerId = String(message.playerId || crypto.randomUUID());
+      if (room.gameActive && !existingPlayer) {
+        sendJson(socket, { type: 'room-unavailable', ...buildRoomStatus(roomCode), reason: 'game-in-progress' });
+        return;
+      }
+
       const name = String(message.name || `Jogador ${room.players.size + 1}`).slice(0, 24);
       const card = Array.isArray(message.card) ? message.card.slice(0, 25).map(Number) : [];
       const cardId = String(message.cardId || playerId.slice(0, 6).toUpperCase()).slice(0, 12);
       socket.meta = { role: 'player', room: roomCode, playerId };
-      room.players.set(socket, { id: playerId, name, cardId, card, ready: false, joinedAt: Date.now() });
-      if (socket.readyState === socket.OPEN) {
-        socket.send(JSON.stringify({ type: 'player-ack', ...buildRoomStatus(roomCode), playerId }));
+
+      if (existingEntry) {
+        const [previousSocket, previousPlayer] = existingEntry;
+        room.players.delete(previousSocket);
+        previousSocket.meta = {};
+        try {
+          previousSocket.close();
+        } catch {
+          undefined;
+        }
+        room.players.set(socket, {
+          ...previousPlayer,
+          name: previousPlayer.name || name,
+          cardId: previousPlayer.cardId || cardId,
+          card: Array.isArray(previousPlayer.card) && previousPlayer.card.length ? previousPlayer.card : card,
+          connected: true,
+          lastSeenAt: Date.now(),
+        });
+      } else {
+        room.players.set(socket, {
+          id: playerId,
+          name,
+          cardId,
+          card,
+          ready: false,
+          connected: true,
+          joinedAt: Date.now(),
+          lastSeenAt: Date.now(),
+        });
       }
+
+      const joinedPlayer = room.players.get(socket);
+      sendJson(socket, {
+        type: 'player-ack',
+        ...buildRoomStatus(roomCode),
+        playerId,
+        player: serializePlayer(joinedPlayer),
+        gameActive: Boolean(room.gameActive),
+        currentBall: room.currentBall,
+      });
       broadcastRoom(roomCode);
       return;
     }
@@ -161,7 +250,7 @@ wss.on('connection', (socket) => {
       const card = Array.isArray(message.card) ? message.card.slice(0, 25).map(Number) : player.card;
       const cardId = String(message.cardId || player.cardId).slice(0, 12);
       const name = String(message.name || player.name).slice(0, 24);
-      room.players.set(socket, { ...player, name, cardId, card, ready: false });
+      room.players.set(socket, { ...player, name, cardId, card, ready: false, connected: true, lastSeenAt: Date.now() });
       broadcastRoom(roomCode);
       return;
     }
@@ -172,61 +261,94 @@ wss.on('connection', (socket) => {
       const card = Array.isArray(message.card) ? message.card.slice(0, 25).map(Number) : player.card;
       const cardId = String(message.cardId || player.cardId).slice(0, 12);
       const name = String(message.name || player.name).slice(0, 24);
-      room.players.set(socket, { ...player, name, cardId, card, ready: true });
+      room.players.set(socket, { ...player, name, cardId, card, ready: true, connected: true, lastSeenAt: Date.now() });
       broadcastRoom(roomCode);
       return;
     }
 
     if (message.type === 'host-game-start') {
-      const payload = JSON.stringify({ type: 'game-start', room: roomCode });
+      room.gameActive = true;
+      const payload = {
+        type: 'game-start',
+        room: roomCode,
+        currentBall: room.currentBall,
+      };
       for (const client of [...room.hosts, ...room.players.keys()]) {
-        if (client.readyState === client.OPEN) client.send(payload);
+        sendJson(client, payload);
       }
+      broadcastRoom(roomCode);
       return;
     }
 
     if (message.type === 'host-ball') {
-      const payload = JSON.stringify({
-        type: 'ball-update',
-        room: roomCode,
+      room.gameActive = true;
+      room.currentBall = {
         number: Number(message.number),
         letter: String(message.letter || ''),
         totalDrawn: Number(message.totalDrawn || 0),
-      });
+      };
+
+      const payload = {
+        type: 'ball-update',
+        room: roomCode,
+        ...room.currentBall,
+      };
 
       for (const client of [...room.hosts, ...room.players.keys()]) {
-        if (client.readyState === client.OPEN) client.send(payload);
+        sendJson(client, payload);
       }
+      broadcastRoom(roomCode);
+      return;
+    }
+
+    if (message.type === 'host-game-reset') {
+      room.gameActive = false;
+      room.currentBall = null;
+      for (const [playerSocket, player] of room.players.entries()) {
+        room.players.set(playerSocket, {
+          ...player,
+          ready: false,
+          connected: true,
+          lastSeenAt: Date.now(),
+        });
+      }
+      for (const client of [...room.hosts, ...room.players.keys()]) {
+        sendJson(client, {
+          type: 'game-reset',
+          room: roomCode,
+        });
+      }
+      broadcastRoom(roomCode);
       return;
     }
 
     if (message.type === 'bingo-claim') {
       const player = Array.from(room.players.values()).find(item => item.id === message.playerId);
-      const payload = JSON.stringify({
+      const payload = {
         type: 'bingo-claim',
         room: roomCode,
         playerId: String(message.playerId || ''),
         playerName: player?.name || 'Jogador',
         cardId: player?.cardId || '',
         card: player?.card?.length ? player.card : (Array.isArray(message.card) ? message.card : []),
-      });
+      };
 
       for (const host of room.hosts) {
-        if (host.readyState === host.OPEN) host.send(payload);
+        sendJson(host, payload);
       }
       return;
     }
 
     if (message.type === 'host-bingo-result') {
-      const payload = JSON.stringify({
+      const payload = {
         type: 'bingo-result',
         room: roomCode,
         playerId: String(message.playerId || ''),
         valid: Boolean(message.valid),
-      });
+      };
 
       for (const client of [...room.hosts, ...room.players.keys()]) {
-        if (client.readyState === client.OPEN) client.send(payload);
+        sendJson(client, payload);
       }
     }
   });
@@ -236,8 +358,28 @@ wss.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return;
 
-    if (role === 'host') room.hosts.delete(socket);
-    if (role === 'player') room.players.delete(socket);
+    if (role === 'host') {
+      room.hosts.delete(socket);
+      for (const playerSocket of room.players.keys()) {
+        sendJson(playerSocket, {
+          type: 'session-ended',
+          room: roomCode,
+        });
+      }
+      rooms.delete(roomCode);
+      return;
+    }
+
+    if (role === 'player') {
+      const player = room.players.get(socket);
+      if (player) {
+        room.players.set(socket, {
+          ...player,
+          connected: false,
+          lastSeenAt: Date.now(),
+        });
+      }
+    }
 
     if (room.hosts.size === 0 && room.players.size === 0) {
       rooms.delete(roomCode);
