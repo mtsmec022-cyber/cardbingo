@@ -303,6 +303,7 @@ export default function BingoWebOSMaster() {
   const hostReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hostAckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hostHeartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hostStatusPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bingoClaimHandlerRef = useRef(null);
   const gamepadPressedRef = useRef<Record<string, boolean>>({});
   const audioQueueDepthRef = useRef(0);
@@ -438,6 +439,7 @@ export default function BingoWebOSMaster() {
     if (typeof window === 'undefined') return '';
     return getOnlineWebSocketUrl();
   }, []);
+  const roomStatusUrl = useMemo(() => `${getOnlineOrigin()}/api/room/`, []);
 
   useEffect(() => {
     onlineConnectedRef.current = onlineConnected;
@@ -467,6 +469,10 @@ export default function BingoWebOSMaster() {
     if (hostHeartbeatTimerRef.current) {
       clearInterval(hostHeartbeatTimerRef.current);
       hostHeartbeatTimerRef.current = null;
+    }
+    if (hostStatusPollTimerRef.current) {
+      clearInterval(hostStatusPollTimerRef.current);
+      hostStatusPollTimerRef.current = null;
     }
     hostShouldReconnectRef.current = false;
     const socket = hostSocketRef.current;
@@ -544,6 +550,23 @@ export default function BingoWebOSMaster() {
             socket.send(JSON.stringify({ type: 'host-heartbeat', room: onlineRoomCode }));
           }, 15000);
         }
+        if (!hostStatusPollTimerRef.current) {
+          hostStatusPollTimerRef.current = window.setInterval(async () => {
+            try {
+              const response = await fetch(`${roomStatusUrl}${onlineRoomCode}`, { cache: 'no-store' });
+              const data = await response.json().catch(() => null);
+              if (!response.ok || !data?.valid) return;
+              const isOnline = Number(data.hostCount || 0) > 0;
+              setOnlineConnected(isOnline);
+              setOnlineConnectionState(isOnline ? 'online' : 'connecting');
+              if (!isOnline && hostSocketRef.current === socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'host-join', room: onlineRoomCode }));
+              }
+            } catch {
+              undefined;
+            }
+          }, 5000);
+        }
         setOnlineConnected(Boolean(message.online));
         setOnlineConnectionState(Boolean(message.online) ? 'online' : 'connecting');
       }
@@ -574,6 +597,10 @@ export default function BingoWebOSMaster() {
         clearInterval(hostHeartbeatTimerRef.current);
         hostHeartbeatTimerRef.current = null;
       }
+      if (hostStatusPollTimerRef.current) {
+        clearInterval(hostStatusPollTimerRef.current);
+        hostStatusPollTimerRef.current = null;
+      }
       setOnlineConnected(false);
       setOnlineConnectionState(hostShouldReconnectRef.current ? 'connecting' : 'offline');
       scheduleHostReconnect();
@@ -583,11 +610,15 @@ export default function BingoWebOSMaster() {
         clearTimeout(hostAckTimerRef.current);
         hostAckTimerRef.current = null;
       }
+      if (hostStatusPollTimerRef.current) {
+        clearInterval(hostStatusPollTimerRef.current);
+        hostStatusPollTimerRef.current = null;
+      }
       setOnlineConnected(false);
       setOnlineConnectionState('offline');
       scheduleHostReconnect();
     };
-  }, [closeHostSession, currentScreen, hostReconnectNonce, onlineGameMode, onlineRoomCode, scheduleHostReconnect, webSocketUrl]);
+  }, [closeHostSession, currentScreen, hostReconnectNonce, onlineGameMode, onlineRoomCode, roomStatusUrl, scheduleHostReconnect, webSocketUrl]);
 
   useEffect(() => {
     return () => {
