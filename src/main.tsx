@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './styles.css';
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
-const MIN_BOOT_LOADING_MS = 1400;
+const MIN_BOOT_LOADING_MS = 10000;
 
 const LOADING_MESSAGES = [
   {

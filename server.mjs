@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, 'dist');
 const port = Number(process.env.PORT || 4180);
 const rooms = new Map();
+const HOST_RECONNECT_GRACE_MS = 8000;
 const normalizeRoomCode = (value) => String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 
 const contentTypes = {
@@ -22,15 +23,27 @@ const contentTypes = {
   '.mp3': 'audio/mpeg',
 };
 
+const roomHasReconnectGrace = (room) => Boolean(room?.hostReconnectUntil && room.hostReconnectUntil > Date.now());
+const getEffectiveHostCount = (room) => (room?.hosts.size || 0) > 0 ? room.hosts.size : (roomHasReconnectGrace(room) ? 1 : 0);
+const clearHostReconnectGrace = (room) => {
+  if (!room) return;
+  if (room.hostReconnectTimer) {
+    clearTimeout(room.hostReconnectTimer);
+    room.hostReconnectTimer = null;
+  }
+  room.hostReconnectUntil = 0;
+};
+
 const buildRoomStatus = (code) => {
   const roomCode = normalizeRoomCode(code);
   const room = rooms.get(roomCode);
+  const hostCount = getEffectiveHostCount(room);
 
   return {
     room: roomCode,
     valid: /^[A-Z0-9]{6}$/.test(roomCode),
-    online: Boolean(room && room.hosts.size > 0),
-    hostCount: room?.hosts.size || 0,
+    online: Boolean(room && hostCount > 0),
+    hostCount,
     playerCount: room ? Array.from(room.players.values()).filter((player) => player.connected !== false).length : 0,
     gameActive: Boolean(room?.gameActive),
     currentBall: room?.currentBall || null,
@@ -93,6 +106,8 @@ const getRoom = (code) => {
       gameActive: false,
       currentBall: null,
       lastHeartbeatAt: Date.now(),
+      hostReconnectTimer: null,
+      hostReconnectUntil: 0,
     });
   }
   return rooms.get(roomCode);
@@ -128,7 +143,7 @@ const broadcastRoom = (code) => {
     room: code,
     players: Array.from(room.players.values()).map(serializePlayer),
     playerCount: Array.from(room.players.values()).filter((player) => player.connected !== false).length,
-    hostCount: room.hosts.size,
+    hostCount: getEffectiveHostCount(room),
     gameActive: Boolean(room.gameActive),
     currentBall: room.currentBall,
   };
@@ -156,6 +171,7 @@ wss.on('connection', (socket) => {
 
     if (message.type === 'host-join') {
       socket.meta = { role: 'host', room: roomCode };
+      clearHostReconnectGrace(room);
       room.hosts.add(socket);
       room.lastHeartbeatAt = Date.now();
       sendJson(socket, {
@@ -169,6 +185,7 @@ wss.on('connection', (socket) => {
     }
 
     if (message.type === 'host-leave') {
+      clearHostReconnectGrace(room);
       for (const playerSocket of room.players.keys()) {
         sendJson(playerSocket, {
           type: 'session-ended',
@@ -182,6 +199,7 @@ wss.on('connection', (socket) => {
 
     if (message.type === 'host-heartbeat') {
       socket.meta = { role: 'host', room: roomCode };
+      clearHostReconnectGrace(room);
       room.hosts.add(socket);
       room.lastHeartbeatAt = Date.now();
       return;
@@ -192,7 +210,7 @@ wss.on('connection', (socket) => {
       const existingEntry = findPlayerEntryById(room, playerId);
       const existingPlayer = existingEntry?.[1] || null;
 
-      if (room.hosts.size <= 0) {
+      if (getEffectiveHostCount(room) <= 0) {
         sendJson(socket, { type: 'room-unavailable', ...buildRoomStatus(roomCode), reason: 'host-offline' });
         return;
       }
@@ -367,13 +385,31 @@ wss.on('connection', (socket) => {
 
     if (role === 'host') {
       room.hosts.delete(socket);
-      for (const playerSocket of room.players.keys()) {
-        sendJson(playerSocket, {
-          type: 'session-ended',
-          room: roomCode,
-        });
+      if (room.hosts.size > 0) {
+        broadcastRoom(roomCode);
+        return;
       }
-      rooms.delete(roomCode);
+
+      clearHostReconnectGrace(room);
+      room.hostReconnectUntil = Date.now() + HOST_RECONNECT_GRACE_MS;
+      room.hostReconnectTimer = setTimeout(() => {
+        const latestRoom = rooms.get(roomCode);
+        if (!latestRoom) return;
+        if (latestRoom.hosts.size > 0) {
+          clearHostReconnectGrace(latestRoom);
+          broadcastRoom(roomCode);
+          return;
+        }
+        clearHostReconnectGrace(latestRoom);
+        for (const playerSocket of latestRoom.players.keys()) {
+          sendJson(playerSocket, {
+            type: 'session-ended',
+            room: roomCode,
+          });
+        }
+        rooms.delete(roomCode);
+      }, HOST_RECONNECT_GRACE_MS);
+      broadcastRoom(roomCode);
       return;
     }
 

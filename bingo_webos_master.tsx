@@ -275,6 +275,7 @@ export default function BingoWebOSMaster() {
   const [onlineQrUrl, setOnlineQrUrl] = useState('');
   const [onlinePlayers, setOnlinePlayers] = useState([]);
   const [onlineConnected, setOnlineConnected] = useState(false);
+  const [onlineConnectionState, setOnlineConnectionState] = useState<'idle' | 'connecting' | 'online' | 'offline'>('idle');
   const [onlineGameMode, setOnlineGameMode] = useState(false);
   const [validationOverlay, setValidationOverlay] = useState(null);
   const [bingoWinner, setBingoWinner] = useState(null);
@@ -343,6 +344,16 @@ export default function BingoWebOSMaster() {
     connectedOnlinePlayers.filter(player => player.ready).length
   ), [connectedOnlinePlayers]);
   const canStartOnlineGame = connectedOnlinePlayers.length >= 2 && onlineReadyCount === connectedOnlinePlayers.length;
+  const onlineStatusTone = onlineConnectionState === 'online'
+    ? 'text-emerald-400'
+    : onlineConnectionState === 'offline'
+      ? 'text-rose-400'
+      : 'text-amber-400';
+  const onlineStatusLabel = onlineConnectionState === 'online'
+    ? 'Online'
+    : onlineConnectionState === 'offline'
+      ? 'Offline'
+      : 'Conectando';
   const onlinePlayersListMarkup = useMemo(() => {
     if (connectedOnlinePlayers.length === 0) {
       return (
@@ -505,6 +516,7 @@ export default function BingoWebOSMaster() {
     hostSocketRef.current = socket;
 
     socket.onopen = () => {
+      setOnlineConnectionState('connecting');
       setOnlineConnected(false);
       socket.send(JSON.stringify({ type: 'host-join', room: onlineRoomCode }));
       if (hostAckTimerRef.current) clearTimeout(hostAckTimerRef.current);
@@ -533,6 +545,7 @@ export default function BingoWebOSMaster() {
           }, 15000);
         }
         setOnlineConnected(Boolean(message.online));
+        setOnlineConnectionState(Boolean(message.online) ? 'online' : 'connecting');
       }
       if (message.type === 'room-update' && message.room === onlineRoomCode) {
         if (hostAckTimerRef.current) {
@@ -540,6 +553,7 @@ export default function BingoWebOSMaster() {
           hostAckTimerRef.current = null;
         }
         setOnlineConnected(Number(message.hostCount || 0) > 0);
+        setOnlineConnectionState(Number(message.hostCount || 0) > 0 ? 'online' : 'connecting');
         setOnlinePlayers(message.players || []);
       }
       if (message.type === 'bingo-claim' && message.room === onlineRoomCode) {
@@ -561,6 +575,7 @@ export default function BingoWebOSMaster() {
         hostHeartbeatTimerRef.current = null;
       }
       setOnlineConnected(false);
+      setOnlineConnectionState(hostShouldReconnectRef.current ? 'connecting' : 'offline');
       scheduleHostReconnect();
     };
     socket.onerror = () => {
@@ -569,6 +584,7 @@ export default function BingoWebOSMaster() {
         hostAckTimerRef.current = null;
       }
       setOnlineConnected(false);
+      setOnlineConnectionState('offline');
       scheduleHostReconnect();
     };
   }, [closeHostSession, currentScreen, hostReconnectNonce, onlineGameMode, onlineRoomCode, scheduleHostReconnect, webSocketUrl]);
@@ -1421,6 +1437,7 @@ export default function BingoWebOSMaster() {
   const renewOnlineRoom = useCallback(() => {
     closeHostSession(true);
     setOnlinePlayers([]);
+    setOnlineConnectionState('connecting');
     setOnlineRoomCode(generateRoomCode());
   }, [closeHostSession]);
 
@@ -1667,8 +1684,8 @@ export default function BingoWebOSMaster() {
               <div className="bg-black/40 border border-slate-800 rounded-2xl p-6">
                 <div className="text-slate-500 uppercase font-black tracking-widest text-sm mb-2">Sala</div>
                 <div className="text-5xl font-black text-amber-500 tracking-widest">{onlineRoomCode}</div>
-                <div className={`text-sm font-black uppercase tracking-widest mt-3 ${onlineConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {onlineConnected ? 'Online' : 'Conectando'}
+                <div className={`text-sm font-black uppercase tracking-widest mt-3 ${onlineStatusTone}`}>
+                  {onlineStatusLabel}
                 </div>
               </div>
               <button onClick={renewOnlineRoom} className="bg-slate-800 hover:bg-slate-700 text-white rounded-2xl border-2 border-slate-700 font-black text-xl uppercase tracking-widest flex items-center justify-center gap-3 focus:outline-none focus:ring-4 focus:ring-white transition-all">
