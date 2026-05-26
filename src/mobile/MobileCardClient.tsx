@@ -47,7 +47,7 @@ const isStandaloneApp = () => (
   || (window.navigator as any).standalone === true
 );
 const isIosLike = () => /iphone|ipad|ipod/i.test(window.navigator.userAgent);
-const RENDER_ONLINE_ORIGIN = 'https://bingohouse.onrender.com';
+const RENDER_ONLINE_ORIGIN = import.meta.env.VITE_ONLINE_ORIGIN || 'https://bingohouse-cartela.onrender.com';
 const getOnlineWebSocketUrl = () => {
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';

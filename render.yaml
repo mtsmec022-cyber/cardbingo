@@ -1,12 +1,16 @@
 services:
   - type: web
-    name: bingohouse
+    name: bingohouse-cartela
     runtime: node
     plan: starter
-    buildCommand: npm ci --include=dev && npm run build
+    buildCommand: npm ci --include=dev && VITE_MOBILE_ONLY=true VITE_ONLINE_ORIGIN=https://bingohouse-cartela.onrender.com npm run build
     startCommand: npm run serve
     autoDeploy: true
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
         value: production
+      - key: VITE_MOBILE_ONLY
+        value: "true"
+      - key: VITE_ONLINE_ORIGIN
+        value: https://bingohouse-cartela.onrender.com

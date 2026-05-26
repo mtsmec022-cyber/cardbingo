@@ -1,13 +1,32 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import BingoWebOSMaster from '../bingo_webos_master';
 import './styles.css';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <BingoWebOSMaster />
-  </React.StrictMode>
-);
+const root = ReactDOM.createRoot(document.getElementById('root')!);
+
+const renderApp = async () => {
+  const params = new URLSearchParams(window.location.search);
+  const mobileOnly = import.meta.env.VITE_MOBILE_ONLY === 'true';
+
+  if (mobileOnly || params.get('cartela') === 'mobile') {
+    const { default: MobileCardClient } = await import('./mobile/MobileCardClient');
+    root.render(
+      <React.StrictMode>
+        <MobileCardClient />
+      </React.StrictMode>
+    );
+    return;
+  }
+
+  const { default: BingoWebOSMaster } = await import('../bingo_webos_master');
+  root.render(
+    <React.StrictMode>
+      <BingoWebOSMaster />
+    </React.StrictMode>
+  );
+};
+
+renderApp();
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

@@ -51,7 +51,7 @@ const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a'];
 const AUDIO_TIMEOUT_MS = 7000;
 const DRAW_MAX_TICKS = 10;
 const DRAW_TICK_MS = 45;
-const RENDER_ONLINE_ORIGIN = 'https://bingohouse.onrender.com';
+const RENDER_ONLINE_ORIGIN = import.meta.env.VITE_ONLINE_ORIGIN || 'https://bingohouse-cartela.onrender.com';
 const getOnlineOrigin = () => {
   if (typeof window === 'undefined') return RENDER_ONLINE_ORIGIN;
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
