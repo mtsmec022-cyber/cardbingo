@@ -343,6 +343,78 @@ export default function BingoWebOSMaster() {
     connectedOnlinePlayers.filter(player => player.ready).length
   ), [connectedOnlinePlayers]);
   const canStartOnlineGame = connectedOnlinePlayers.length >= 2 && onlineReadyCount === connectedOnlinePlayers.length;
+  const onlinePlayersListMarkup = useMemo(() => {
+    if (connectedOnlinePlayers.length === 0) {
+      return (
+        <div className="col-span-2 h-28 bg-black/40 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-500 font-black uppercase tracking-widest">
+          Aguardando jogadores
+        </div>
+      );
+    }
+
+    return connectedOnlinePlayers.slice(0, 8).map((player, index) => (
+      <div key={player.id || index} className="h-20 bg-black/40 border border-slate-800 rounded-2xl flex items-center gap-4 px-5">
+        <div className={`w-10 h-10 rounded-full text-white flex items-center justify-center font-black ${player.ready ? 'bg-emerald-600' : 'bg-slate-700'}`}>{index + 1}</div>
+        <div className="min-w-0 flex-1">
+          <div className="text-white font-black uppercase tracking-wider truncate">{player.name || `Jogador ${index + 1}`}</div>
+          <div className={`text-[10px] font-black uppercase tracking-widest ${player.ready ? 'text-emerald-400' : 'text-amber-500'}`}>
+            {player.ready ? `Pronto • ${player.cardId || 'Cartela'}` : 'Escolhendo cartela'}
+          </div>
+        </div>
+      </div>
+    ));
+  }, [connectedOnlinePlayers]);
+  const onlineRankingMarkup = useMemo(() => {
+    if (onlineRanking.length === 0) return <div className="text-slate-600 text-xs font-bold">Sem cartelas</div>;
+
+    return onlineRanking.slice(0, 4).map((player, index) => (
+      <div key={player.id || index} className="bg-slate-900 border border-slate-800 rounded-xl p-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-amber-500 font-black text-sm">#{index + 1}</span>
+          <span className="text-white font-black text-xs truncate">{player.cardId || player.id?.slice(0, 6)}</span>
+        </div>
+        <div className="text-slate-500 text-[10px] font-bold uppercase mt-1">
+          {player.progress.missing === 0 ? 'Bingo pronto' : `Faltam ${player.progress.missing}`}
+        </div>
+      </div>
+    ));
+  }, [onlineRanking]);
+  const recentBallsMarkup = useMemo(() => {
+    if (recentBalls.length === 0) return <div className="text-slate-600 text-sm">--</div>;
+
+    return recentBalls.slice(0, 4).map((num, i) => (
+      <div key={i} className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg border
+        ${i === 0 && !isDrawing ? 'bg-indigo-600 text-white border-white scale-110 shadow-lg' : 'bg-slate-800 text-slate-400 border-slate-700'}
+      `}>{num}</div>
+    ));
+  }, [isDrawing, recentBalls]);
+  const board75Markup = useMemo(() => (
+    boardRows75.map((row) => (
+      <div key={row.letter} className="flex items-center gap-3 flex-1">
+        <div className={`w-16 h-full shrink-0 flex items-center justify-center rounded-xl ${row.bg} border-2 border-slate-800`}>
+          <span className={`text-3xl font-black ${row.text}`}>{row.letter}</span>
+        </div>
+        <div className="flex-1 grid grid-cols-15 gap-2 h-full" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr))' }}>
+          {row.numbers.map(num => {
+            const isDrawn = drawnBallSet.has(num);
+            const isAnim = displayNumber === num && isDrawing;
+            return (
+              <BingoNumber75Cell key={num} num={num} activeBg={row.activeBg} isDrawn={isDrawn} isAnim={isAnim} />
+            );
+          })}
+        </div>
+      </div>
+    ))
+  ), [boardRows75, displayNumber, drawnBallSet, isDrawing]);
+  const board90Markup = useMemo(() => (
+    boardNumbers90.map(num => {
+      const isDrawn = drawnBallSet.has(num);
+      const isAnim = displayNumber === num && isDrawing;
+      return (
+        <BingoNumber90Cell key={num} num={num} isDrawn={isDrawn} isAnim={isAnim} />
+      );
+    })
+  ), [boardNumbers90, displayNumber, drawnBallSet, isDrawing]);
   const mobileCardUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
     const url = new URL(getOnlineOrigin());
@@ -1612,22 +1684,7 @@ export default function BingoWebOSMaster() {
                 <div className="text-5xl font-black text-amber-500">{connectedOnlinePlayers.length}</div>
               </div>
               <div className="grid grid-cols-2 gap-3 flex-1 overflow-hidden content-start">
-              {connectedOnlinePlayers.length === 0 && (
-                <div className="col-span-2 h-28 bg-black/40 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-500 font-black uppercase tracking-widest">
-                  Aguardando jogadores
-                </div>
-              )}
-              {connectedOnlinePlayers.slice(0, 8).map((player, index) => (
-                <div key={player.id || index} className="h-20 bg-black/40 border border-slate-800 rounded-2xl flex items-center gap-4 px-5">
-                  <div className={`w-10 h-10 rounded-full text-white flex items-center justify-center font-black ${player.ready ? 'bg-emerald-600' : 'bg-slate-700'}`}>{index + 1}</div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-white font-black uppercase tracking-wider truncate">{player.name || `Jogador ${index + 1}`}</div>
-                    <div className={`text-[10px] font-black uppercase tracking-widest ${player.ready ? 'text-emerald-400' : 'text-amber-500'}`}>
-                      {player.ready ? `Pronto • ${player.cardId || 'Cartela'}` : 'Escolhendo cartela'}
-                    </div>
-                  </div>
-                </div>
-              ))}
+              {onlinePlayersListMarkup}
             </div>
             <button
               onClick={() => {
@@ -1700,18 +1757,7 @@ export default function BingoWebOSMaster() {
               <div className="bg-black/50 p-4 rounded-2xl border border-slate-800 flex-1 overflow-hidden">
                 <div className="text-xs text-slate-500 uppercase font-black mb-3 tracking-widest">Ranking</div>
                 <div className="flex flex-col gap-1.5">
-                  {onlineRanking.length === 0 && <div className="text-slate-600 text-xs font-bold">Sem cartelas</div>}
-                  {onlineRanking.slice(0, 4).map((player, index) => (
-                    <div key={player.id || index} className="bg-slate-900 border border-slate-800 rounded-xl p-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-amber-500 font-black text-sm">#{index + 1}</span>
-                        <span className="text-white font-black text-xs truncate">{player.cardId || player.id?.slice(0, 6)}</span>
-                      </div>
-                      <div className="text-slate-500 text-[10px] font-bold uppercase mt-1">
-                        {player.progress.missing === 0 ? 'Bingo pronto' : `Faltam ${player.progress.missing}`}
-                      </div>
-                    </div>
-                  ))}
+                  {onlineRankingMarkup}
                 </div>
               </div>
             )}
@@ -1750,14 +1796,7 @@ export default function BingoWebOSMaster() {
 
              <div className="flex flex-col z-10 w-1/3 items-end">
                 <span className="text-slate-500 font-bold uppercase tracking-widest text-sm mb-2">Anteriores</span>
-                <div className="flex gap-2">
-                  {recentBalls.slice(0,4).map((num, i) => (
-                    <div key={i} className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg border
-                      ${i === 0 && !isDrawing ? 'bg-indigo-600 text-white border-white scale-110 shadow-lg' : 'bg-slate-800 text-slate-400 border-slate-700'}
-                    `}>{num}</div>
-                  ))}
-                  {recentBalls.length === 0 && <div className="text-slate-600 text-sm">--</div>}
-                </div>
+                <div className="flex gap-2">{recentBallsMarkup}</div>
              </div>
           </div>
 
@@ -1798,36 +1837,14 @@ export default function BingoWebOSMaster() {
           {/* LAYOUT 75 BOLAS */}
           {settings.gameType === '75' && (
              <div className="flex-1 flex flex-col gap-2">
-                {boardRows75.map((row) => (
-                  <div key={row.letter} className="flex items-center gap-3 flex-1">
-                    <div className={`w-16 h-full shrink-0 flex items-center justify-center rounded-xl ${row.bg} border-2 border-slate-800`}>
-                      <span className={`text-3xl font-black ${row.text}`}>{row.letter}</span>
-                    </div>
-                    <div className="flex-1 grid grid-cols-15 gap-2 h-full" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr))' }}>
-                      {row.numbers.map(num => {
-                        const isDrawn = drawnBallSet.has(num);
-                        const isAnim = displayNumber === num && isDrawing;
-                        return (
-                          <BingoNumber75Cell key={num} num={num} activeBg={row.activeBg} isDrawn={isDrawn} isAnim={isAnim} />
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+                {board75Markup}
              </div>
           )}
 
           {/* LAYOUT 90 BOLAS */}
           {settings.gameType === '90' && (
              <div className="flex-1 grid grid-cols-10 gap-2">
-               {/* Gerar os 90 números em grid direto */}
-               {boardNumbers90.map(num => {
-                  const isDrawn = drawnBallSet.has(num);
-                  const isAnim = displayNumber === num && isDrawing;
-                  return (
-                    <BingoNumber90Cell key={num} num={num} isDrawn={isDrawn} isAnim={isAnim} />
-                  );
-               })}
+               {board90Markup}
              </div>
           )}
         </main>
