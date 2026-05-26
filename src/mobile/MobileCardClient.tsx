@@ -48,6 +48,12 @@ const isStandaloneApp = () => (
 );
 const isIosLike = () => /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 const RENDER_ONLINE_ORIGIN = import.meta.env.VITE_ONLINE_ORIGIN || 'https://bingohouse-cartela.onrender.com';
+const getOnlineOrigin = () => {
+  if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+    return window.location.origin;
+  }
+  return RENDER_ONLINE_ORIGIN;
+};
 const getOnlineWebSocketUrl = () => {
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -76,11 +82,16 @@ export default function MobileCardClient() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scannerTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playerSocketRef = useRef<WebSocket | null>(null);
+  const suppressDisconnectModalRef = useRef(false);
   const playerIdRef = useRef(localStorage.getItem('bingohouse-player-id') || createClientId());
   const selectedCard = cardOptions[cardIndex];
 
   const webSocketUrl = useMemo(() => {
     return getOnlineWebSocketUrl();
+  }, []);
+
+  const roomStatusUrl = useMemo(() => {
+    return `${getOnlineOrigin()}/api/room/`;
   }, []);
 
   const stopScanner = useCallback(() => {
@@ -96,8 +107,10 @@ export default function MobileCardClient() {
     const socket = playerSocketRef.current;
     playerSocketRef.current = null;
     if (!socket) return;
+    suppressDisconnectModalRef.current = true;
     socket.onclose = null;
     socket.onerror = null;
+    socket.onmessage = null;
     socket.close();
   }, []);
 
@@ -118,7 +131,28 @@ export default function MobileCardClient() {
     returnToHomeWithModal('Você saiu da sala', 'A conexão com a sala foi encerrada.');
   }, [closePlayerSocket, returnToHomeWithModal]);
 
-  const enterRoom = useCallback((room: string) => {
+  const checkRoomAvailability = useCallback(async (room: string) => {
+    const normalized = normalizeRoomCode(room);
+    if (!isValidRoomCode(normalized)) {
+      return { ok: false, reason: 'Digite um código válido de 6 caracteres.' };
+    }
+
+    try {
+      const response = await fetch(`${roomStatusUrl}${normalized}`, { cache: 'no-store' });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.valid) {
+        return { ok: false, reason: 'Código da sala inválido.' };
+      }
+      if (!data.online) {
+        return { ok: false, reason: 'Esta sala está offline no momento. Verifique a TV.' };
+      }
+      return { ok: true, room: normalized };
+    } catch {
+      return { ok: false, reason: 'Não foi possível validar a sala agora.' };
+    }
+  }, [roomStatusUrl]);
+
+  const enterRoom = useCallback(async (room: string) => {
     const normalized = normalizeRoomCode(room);
     if (!isValidRoomCode(normalized)) {
       setMessage('Digite um código válido de 6 caracteres.');
@@ -130,6 +164,13 @@ export default function MobileCardClient() {
     if (!cleanName) {
       setEditingName(true);
       setMessage('Digite seu nome para entrar.');
+      return;
+    }
+
+    setMessage('Verificando sala...');
+    const availability = await checkRoomAvailability(normalized);
+    if (!availability.ok) {
+      setMessage(availability.reason);
       return;
     }
 
@@ -146,9 +187,11 @@ export default function MobileCardClient() {
     setScreen('select');
 
     closePlayerSocket();
+    suppressDisconnectModalRef.current = false;
     const socket = new WebSocket(webSocketUrl);
     playerSocketRef.current = socket;
     socket.onopen = () => {
+      setMessage('Conectando à sala...');
       socket.send(JSON.stringify({
         type: 'player-join',
         room: normalized,
@@ -160,6 +203,17 @@ export default function MobileCardClient() {
     };
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
+      if (data.type === 'room-unavailable' && data.room === normalized) {
+        suppressDisconnectModalRef.current = true;
+        playerSocketRef.current = null;
+        socket.close();
+        returnToHomeWithModal('Sala indisponível', 'A sala existe, mas a TV não está online agora. Verifique o código ou aguarde a TV conectar.');
+        return;
+      }
+      if (data.type === 'player-ack' && data.room === normalized) {
+        setMessage(`Conectado à sala ${normalized}`);
+        return;
+      }
       if (data.type === 'room-update' && data.room === normalized) {
         if (Number(data.hostCount || 0) <= 0) {
           closePlayerSocket();
@@ -188,9 +242,13 @@ export default function MobileCardClient() {
     socket.onclose = () => {
       if (playerSocketRef.current !== socket) return;
       playerSocketRef.current = null;
+      if (suppressDisconnectModalRef.current) {
+        suppressDisconnectModalRef.current = false;
+        return;
+      }
       returnToHomeWithModal('Conexão perdida', 'Você foi desconectado da sala. Verifique a TV e entre novamente.');
     };
-  }, [closePlayerSocket, playerName, returnToHomeWithModal, selectedCard, webSocketUrl]);
+  }, [checkRoomAvailability, closePlayerSocket, playerName, returnToHomeWithModal, selectedCard, webSocketUrl]);
 
   useEffect(() => {
     localStorage.setItem('bingohouse-player-id', playerIdRef.current);

@@ -360,13 +360,17 @@ export default function BingoWebOSMaster() {
     hostSocketRef.current = socket;
 
     socket.onopen = () => {
-      setOnlineConnected(true);
+      setOnlineConnected(false);
       socket.send(JSON.stringify({ type: 'host-join', room: onlineRoomCode }));
     };
 
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
+      if (message.type === 'host-ack' && message.room === onlineRoomCode) {
+        setOnlineConnected(Boolean(message.online));
+      }
       if (message.type === 'room-update' && message.room === onlineRoomCode) {
+        setOnlineConnected(Number(message.hostCount || 0) > 0);
         setOnlinePlayers(message.players || []);
       }
       if (message.type === 'bingo-claim' && message.room === onlineRoomCode) {

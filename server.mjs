@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, 'dist');
 const port = Number(process.env.PORT || 4180);
 const rooms = new Map();
+const normalizeRoomCode = (value) => String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -21,8 +22,32 @@ const contentTypes = {
   '.mp3': 'audio/mpeg',
 };
 
+const buildRoomStatus = (code) => {
+  const roomCode = normalizeRoomCode(code);
+  const room = rooms.get(roomCode);
+
+  return {
+    room: roomCode,
+    valid: /^[A-Z0-9]{6}$/.test(roomCode),
+    online: Boolean(room && room.hosts.size > 0),
+    hostCount: room?.hosts.size || 0,
+    playerCount: room?.players.size || 0,
+  };
+};
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host}`);
+
+  if (url.pathname.startsWith('/api/room/')) {
+    const status = buildRoomStatus(url.pathname.split('/').pop() || '');
+    res.writeHead(status.valid ? 200 : 400, {
+      'Content-Type': contentTypes['.json'],
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify(status));
+    return;
+  }
+
   const safePath = path.normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
   let filePath = path.join(distDir, safePath);
 
@@ -58,10 +83,11 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 const getRoom = (code) => {
-  if (!rooms.has(code)) {
-    rooms.set(code, { hosts: new Set(), players: new Map() });
+  const roomCode = normalizeRoomCode(code);
+  if (!rooms.has(roomCode)) {
+    rooms.set(roomCode, { hosts: new Set(), players: new Map() });
   }
-  return rooms.get(code);
+  return rooms.get(roomCode);
 };
 
 const broadcastRoom = (code) => {
@@ -92,7 +118,7 @@ wss.on('connection', (socket) => {
       return;
     }
 
-    const roomCode = String(message.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    const roomCode = normalizeRoomCode(message.room);
     if (!/^[A-Z0-9]{6}$/.test(roomCode)) return;
 
     const room = getRoom(roomCode);
@@ -100,17 +126,30 @@ wss.on('connection', (socket) => {
     if (message.type === 'host-join') {
       socket.meta = { role: 'host', room: roomCode };
       room.hosts.add(socket);
+      if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: 'host-ack', ...buildRoomStatus(roomCode) }));
+      }
       broadcastRoom(roomCode);
       return;
     }
 
     if (message.type === 'player-join') {
+      if (room.hosts.size <= 0) {
+        if (socket.readyState === socket.OPEN) {
+          socket.send(JSON.stringify({ type: 'room-unavailable', ...buildRoomStatus(roomCode) }));
+        }
+        return;
+      }
+
       const playerId = String(message.playerId || crypto.randomUUID());
       const name = String(message.name || `Jogador ${room.players.size + 1}`).slice(0, 24);
       const card = Array.isArray(message.card) ? message.card.slice(0, 25).map(Number) : [];
       const cardId = String(message.cardId || playerId.slice(0, 6).toUpperCase()).slice(0, 12);
       socket.meta = { role: 'player', room: roomCode, playerId };
       room.players.set(socket, { id: playerId, name, cardId, card, ready: false, joinedAt: Date.now() });
+      if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: 'player-ack', ...buildRoomStatus(roomCode), playerId }));
+      }
       broadcastRoom(roomCode);
       return;
     }
