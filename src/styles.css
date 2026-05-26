@@ -255,6 +255,10 @@ button {
   will-change: transform, opacity;
 }
 
+.webos-control-press {
+  animation: webos-control-press 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 @keyframes webos-bingo-pop {
   0% {
     opacity: 0;
@@ -269,6 +273,23 @@ button {
   100% {
     opacity: 1;
     transform: translateZ(0) scale(1);
+  }
+}
+
+@keyframes webos-control-press {
+  0% {
+    transform: translateZ(0) scale(1);
+    box-shadow: 0 0 0 rgba(245, 158, 11, 0);
+  }
+
+  45% {
+    transform: translateZ(0) scale(0.975);
+    box-shadow: 0 0 0 10px rgba(245, 158, 11, 0.16);
+  }
+
+  100% {
+    transform: translateZ(0) scale(1);
+    box-shadow: 0 0 0 rgba(245, 158, 11, 0);
   }
 }
 

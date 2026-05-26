@@ -61,6 +61,11 @@ const MANUAL_DRAW_MAX_TICKS = 4;
 const MANUAL_DRAW_TICK_MS = 28;
 const MANUAL_DRAW_INTERVAL_MS = 140;
 const GAMEPAD_POLL_MS = 120;
+const UI_SOUND_LEVELS = [
+  { label: 'Suave', value: 0.16 },
+  { label: 'Normal', value: 0.22 },
+  { label: 'Realce', value: 0.3 },
+];
 const RENDER_ONLINE_ORIGIN = import.meta.env.VITE_ONLINE_ORIGIN || 'https://bingohouse-cartela.onrender.com';
 const publicAssetPath = (path: string) => {
   const normalized = path.replace(/^\/+/, '');
@@ -256,6 +261,8 @@ export default function BingoWebOSMaster() {
   
   const [settings, setSettings] = useState({
     soundEnabled: true,
+    uiSoundEnabled: true,
+    uiSoundVolume: 0.22,
     autoSpeed: 5000,
     gameType: '75', // '75' ou '90'
     voiceId: 3
@@ -737,6 +744,45 @@ export default function BingoWebOSMaster() {
     });
   }, [showExitConfirm]);
 
+  const pulseButtonFeedback = useCallback((button?: HTMLButtonElement | null) => {
+    if (!button) return;
+    button.classList.remove('webos-control-press');
+    void button.offsetWidth;
+    button.classList.add('webos-control-press');
+    window.setTimeout(() => button.classList.remove('webos-control-press'), 220);
+  }, []);
+
+  const playUiFeedbackSound = useCallback((type: 'move' | 'confirm' | 'back' = 'move') => {
+    if (!settings.soundEnabled || !settings.uiSoundEnabled || typeof window === 'undefined') return;
+
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    const context = audioContextRef.current ?? new AudioContextClass();
+    audioContextRef.current = context;
+    if (context.state === 'suspended') context.resume().catch(() => undefined);
+
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const now = context.currentTime;
+    const volume = settings.uiSoundVolume;
+    const frequency = type === 'confirm' ? 520 : type === 'back' ? 340 : 420;
+    const endFrequency = type === 'confirm' ? 650 : type === 'back' ? 260 : 470;
+    const duration = type === 'confirm' ? 0.11 : 0.085;
+
+    oscillator.type = type === 'move' ? 'sine' : 'triangle';
+    oscillator.frequency.setValueAtTime(frequency, now);
+    oscillator.frequency.exponentialRampToValueAtTime(endFrequency, now + duration);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(volume, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(now);
+    oscillator.stop(now + duration + 0.02);
+  }, [settings.soundEnabled, settings.uiSoundEnabled, settings.uiSoundVolume]);
+
   const moveFocus = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     const buttons = getFocusableButtons();
     const active = document.activeElement as HTMLButtonElement | null;
@@ -774,10 +820,14 @@ export default function BingoWebOSMaster() {
       .filter(Boolean) as { button: HTMLButtonElement; score: number }[];
 
     candidates.sort((a, b) => a.score - b.score);
-    candidates[0]?.button.focus();
-  }, [getFocusableButtons]);
+    const nextButton = candidates[0]?.button;
+    if (!nextButton) return;
+    nextButton.focus();
+    playUiFeedbackSound('move');
+  }, [getFocusableButtons, playUiFeedbackSound]);
 
   const goBack = useCallback(() => {
+    playUiFeedbackSound('back');
     if (showExitConfirm) {
       setShowExitConfirm(false);
       return;
@@ -801,7 +851,7 @@ export default function BingoWebOSMaster() {
     }
 
     if (currentScreen !== 'menu') setCurrentScreen('menu');
-  }, [currentScreen, showBingoCelebration, showExitConfirm]);
+  }, [currentScreen, playUiFeedbackSound, showBingoCelebration, showExitConfirm]);
 
   const requestExitApp = useCallback(() => {
     setShowExitConfirm(false);
@@ -1244,7 +1294,10 @@ export default function BingoWebOSMaster() {
 
   useEffect(() => {
     const triggerFocusedButton = () => {
-      (document.activeElement as HTMLButtonElement | null)?.click?.();
+      const button = document.activeElement as HTMLButtonElement | null;
+      pulseButtonFeedback(button);
+      playUiFeedbackSound('confirm');
+      button?.click?.();
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1294,7 +1347,7 @@ export default function BingoWebOSMaster() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [currentScreen, goBack, handleBingo, moveFocus, toggleAutoPlay, triggerManualDraw]);
+  }, [currentScreen, goBack, handleBingo, moveFocus, playUiFeedbackSound, pulseButtonFeedback, toggleAutoPlay, triggerManualDraw]);
 
   const executeInitialDraw = useCallback(() => {
     if (drawInProgressRef.current || isDrawing || drawnBalls.length >= TOTAL_BALLS) return;
@@ -1401,10 +1454,14 @@ export default function BingoWebOSMaster() {
       runActionOnce('right', getGamepadButton(gamepad, 15) || getAxisPressed(gamepad.axes[0], false), () => moveFocus('right'));
       runActionOnce('confirm', getGamepadButton(gamepad, 0), () => {
         if (currentScreen === 'game') {
+          playUiFeedbackSound('confirm');
           triggerManualDraw();
           return;
         }
-        (document.activeElement as HTMLButtonElement | null)?.click?.();
+        const button = document.activeElement as HTMLButtonElement | null;
+        pulseButtonFeedback(button);
+        playUiFeedbackSound('confirm');
+        button?.click?.();
       });
       runActionOnce('bingo', getGamepadButton(gamepad, 2), () => {
         if (currentScreen === 'game') handleBingo();
@@ -1416,7 +1473,7 @@ export default function BingoWebOSMaster() {
     }, GAMEPAD_POLL_MS);
 
     return () => window.clearInterval(interval);
-  }, [currentScreen, goBack, handleBingo, moveFocus, toggleAutoPlay, triggerManualDraw]);
+  }, [currentScreen, goBack, handleBingo, moveFocus, playUiFeedbackSound, pulseButtonFeedback, toggleAutoPlay, triggerManualDraw]);
 
   // Mudar tipo de jogo reinicia tudo
   const handleGameTypeChange = (type) => {
@@ -1664,6 +1721,34 @@ export default function BingoWebOSMaster() {
                 </button>
               );
             })}
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h3 className="text-3xl font-bold text-white mb-2 flex items-center gap-3"><Sparkles className="text-amber-500"/> Efeitos de Interface</h3>
+              <div className="text-slate-400 font-semibold">Som suave e resposta visual ao usar o controle no menu.</div>
+            </div>
+            <button
+              onClick={() => setSettings(s => ({ ...s, uiSoundEnabled: !s.uiSoundEnabled }))}
+              className={`w-32 h-16 rounded-full p-2 transition-colors duration-300 focus:outline-none focus:ring-4 focus:ring-white flex items-center ${settings.uiSoundEnabled ? 'bg-emerald-600' : 'bg-slate-700'}`}
+            >
+              <div className={`w-12 h-12 bg-white rounded-full shadow-md transform transition-transform duration-300 ${settings.uiSoundEnabled ? 'translate-x-16' : 'translate-x-0'}`} />
+            </button>
+          </div>
+          <div className="flex gap-4">
+            {UI_SOUND_LEVELS.map(level => (
+              <button
+                key={level.value}
+                onClick={() => setSettings(s => ({ ...s, uiSoundVolume: level.value }))}
+                className={`flex-1 p-6 rounded-2xl flex flex-col items-center gap-3 font-bold text-xl transition-all focus:outline-none focus:scale-105 focus:ring-4 focus:ring-white
+                  ${Math.abs(settings.uiSoundVolume - level.value) < 0.001 ? 'bg-amber-600 text-black border-2 border-amber-400' : 'bg-slate-800 text-slate-300 border-2 border-slate-700 hover:bg-slate-700'}
+                `}
+              >
+                {level.label}
+              </button>
+            ))}
           </div>
         </div>
 
