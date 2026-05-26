@@ -1,6 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+};
+
 const normalizeRoomCode = (value: string) => value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 const isValidRoomCode = (value: string) => /^[A-Z0-9]{6}$/.test(value);
 const createClientId = () => {
@@ -37,6 +42,11 @@ const generateCard75 = () => {
 };
 
 const createCardOption = () => ({ id: createCardId(), numbers: generateCard75() });
+const isStandaloneApp = () => (
+  window.matchMedia?.('(display-mode: standalone)').matches
+  || (window.navigator as any).standalone === true
+);
+const isIosLike = () => /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 
 export default function MobileCardClient() {
   const [screen, setScreen] = useState<'home' | 'select' | 'card'>('home');
@@ -53,6 +63,8 @@ export default function MobileCardClient() {
   const [currentBall, setCurrentBall] = useState<{ number: number; letter?: string; totalDrawn?: number } | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [showInstallModal, setShowInstallModal] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const scannerTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const playerSocketRef = useRef<WebSocket | null>(null);
@@ -189,6 +201,48 @@ export default function MobileCardClient() {
     };
   }, []);
 
+  useEffect(() => {
+    if (isStandaloneApp() || localStorage.getItem('bingohouse-install-dismissed') === '1') return;
+
+    const timer = window.setTimeout(() => setShowInstallModal(true), 900);
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+      setShowInstallModal(true);
+    };
+    const handleInstalled = () => {
+      localStorage.setItem('bingohouse-install-dismissed', '1');
+      setShowInstallModal(false);
+      setInstallPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleInstalled);
+
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleInstalled);
+    };
+  }, []);
+
+  const dismissInstallModal = useCallback(() => {
+    localStorage.setItem('bingohouse-install-dismissed', '1');
+    setShowInstallModal(false);
+  }, []);
+
+  const installMobileApp = useCallback(async () => {
+    if (!installPrompt) return;
+
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice.catch(() => null);
+    if (choice?.outcome === 'accepted') {
+      localStorage.setItem('bingohouse-install-dismissed', '1');
+    }
+    setShowInstallModal(false);
+    setInstallPrompt(null);
+  }, [installPrompt]);
+
   const updateSelectedCard = useCallback((nextIndex: number) => {
     if (isReady || gameStarted) return;
 
@@ -324,10 +378,47 @@ export default function MobileCardClient() {
       </div>
     </div>
   ) : null;
+  const installDialog = showInstallModal && !isStandaloneApp() ? (
+    <div className="fixed inset-0 z-40 bg-black/85 flex items-end sm:items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-slate-950 border border-slate-800 rounded-3xl p-6 text-center shadow-2xl">
+        <div className="w-16 h-16 rounded-2xl bg-amber-600 mx-auto mb-5 flex items-center justify-center">
+          <Sparkles className="w-9 h-9 text-black" />
+        </div>
+        <div className="text-white text-2xl font-black uppercase tracking-widest">Instalar Cartela</div>
+        <div className="text-slate-400 font-bold mt-3 leading-relaxed">
+          Deixe a cartela do Bingo House na tela inicial para entrar mais rápido nas salas.
+        </div>
+        {installPrompt ? (
+          <button
+            onClick={installMobileApp}
+            className="mt-6 h-14 w-full rounded-2xl bg-amber-600 text-black font-black uppercase tracking-widest focus:outline-none focus:ring-4 focus:ring-white"
+          >
+            Instalar
+          </button>
+        ) : (
+          <div className="mt-5 bg-black/40 border border-slate-800 rounded-2xl p-4 text-left">
+            <div className="text-slate-500 text-xs font-black uppercase tracking-widest mb-2">Como instalar</div>
+            <div className="text-slate-200 font-bold text-sm leading-relaxed">
+              {isIosLike()
+                ? 'No Safari, toque em Compartilhar e depois em Adicionar à Tela de Início.'
+                : 'No navegador, abra o menu e toque em Instalar app ou Adicionar à tela inicial.'}
+            </div>
+          </div>
+        )}
+        <button
+          onClick={dismissInstallModal}
+          className="mt-3 h-12 w-full rounded-2xl bg-slate-800 border border-slate-700 text-slate-300 font-black uppercase tracking-widest focus:outline-none focus:ring-4 focus:ring-white"
+        >
+          Agora não
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   if (screen === 'home') {
     return (
       <div className="mobile-card-app min-h-screen bg-black text-slate-200 font-sans p-4 select-none">
+        {installDialog}
         {disconnectDialog}
         <div className="max-w-md mx-auto min-h-screen flex flex-col justify-center gap-5">
           <div className="text-center mb-4">
@@ -426,6 +517,7 @@ export default function MobileCardClient() {
   if (screen === 'select') {
     return (
       <div className="mobile-card-app min-h-screen bg-black text-slate-200 font-sans p-4 select-none">
+        {installDialog}
         {disconnectDialog}
         <div className="max-w-md mx-auto min-h-screen flex flex-col gap-4 py-4">
           <div className="flex items-center justify-between py-2">
@@ -495,6 +587,7 @@ export default function MobileCardClient() {
 
   return (
     <div className="mobile-card-app min-h-screen bg-black text-slate-200 font-sans p-4 select-none">
+      {installDialog}
       {disconnectDialog}
       <div className="max-w-md mx-auto flex flex-col gap-4">
         <div className="flex items-center justify-between py-2">
