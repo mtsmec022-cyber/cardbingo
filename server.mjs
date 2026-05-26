@@ -180,6 +180,13 @@ wss.on('connection', (socket) => {
       return;
     }
 
+    if (message.type === 'host-heartbeat') {
+      socket.meta = { role: 'host', room: roomCode };
+      room.hosts.add(socket);
+      room.lastHeartbeatAt = Date.now();
+      return;
+    }
+
     if (message.type === 'player-join') {
       const playerId = String(message.playerId || crypto.randomUUID());
       const existingEntry = findPlayerEntryById(room, playerId);

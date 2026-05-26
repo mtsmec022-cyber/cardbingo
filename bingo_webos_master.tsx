@@ -300,11 +300,14 @@ export default function BingoWebOSMaster() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const hostSocketRef = useRef<WebSocket | null>(null);
   const hostReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hostAckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hostHeartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bingoClaimHandlerRef = useRef(null);
   const gamepadPressedRef = useRef<Record<string, boolean>>({});
   const audioQueueDepthRef = useRef(0);
   const shuttingDownHostRef = useRef(false);
   const hostShouldReconnectRef = useRef(false);
+  const onlineConnectedRef = useRef(false);
   const [manualDrawCoolingDown, setManualDrawCoolingDown] = useState(false);
   const [hostReconnectNonce, setHostReconnectNonce] = useState(0);
 
@@ -354,6 +357,10 @@ export default function BingoWebOSMaster() {
   }, []);
 
   useEffect(() => {
+    onlineConnectedRef.current = onlineConnected;
+  }, [onlineConnected]);
+
+  useEffect(() => {
     const focusable = Array.from(document.querySelectorAll('button:not(:disabled)')) as HTMLButtonElement[];
     focusable[0]?.focus();
   }, [currentScreen, settings.gameType, patternIndex, showBingoCelebration]);
@@ -369,6 +376,14 @@ export default function BingoWebOSMaster() {
     if (hostReconnectTimerRef.current) {
       clearTimeout(hostReconnectTimerRef.current);
       hostReconnectTimerRef.current = null;
+    }
+    if (hostAckTimerRef.current) {
+      clearTimeout(hostAckTimerRef.current);
+      hostAckTimerRef.current = null;
+    }
+    if (hostHeartbeatTimerRef.current) {
+      clearInterval(hostHeartbeatTimerRef.current);
+      hostHeartbeatTimerRef.current = null;
     }
     hostShouldReconnectRef.current = false;
     const socket = hostSocketRef.current;
@@ -412,14 +427,38 @@ export default function BingoWebOSMaster() {
     socket.onopen = () => {
       setOnlineConnected(false);
       socket.send(JSON.stringify({ type: 'host-join', room: onlineRoomCode }));
+      if (hostAckTimerRef.current) clearTimeout(hostAckTimerRef.current);
+      hostAckTimerRef.current = window.setTimeout(() => {
+        if (hostSocketRef.current === socket && !onlineConnectedRef.current) {
+          try {
+            socket.close();
+          } catch {
+            undefined;
+          }
+        }
+      }, 4000);
     };
 
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
       if (message.type === 'host-ack' && message.room === onlineRoomCode) {
+        if (hostAckTimerRef.current) {
+          clearTimeout(hostAckTimerRef.current);
+          hostAckTimerRef.current = null;
+        }
+        if (!hostHeartbeatTimerRef.current) {
+          hostHeartbeatTimerRef.current = window.setInterval(() => {
+            if (hostSocketRef.current !== socket || socket.readyState !== WebSocket.OPEN) return;
+            socket.send(JSON.stringify({ type: 'host-heartbeat', room: onlineRoomCode }));
+          }, 15000);
+        }
         setOnlineConnected(Boolean(message.online));
       }
       if (message.type === 'room-update' && message.room === onlineRoomCode) {
+        if (hostAckTimerRef.current) {
+          clearTimeout(hostAckTimerRef.current);
+          hostAckTimerRef.current = null;
+        }
         setOnlineConnected(Number(message.hostCount || 0) > 0);
         setOnlinePlayers(message.players || []);
       }
@@ -433,10 +472,22 @@ export default function BingoWebOSMaster() {
         shuttingDownHostRef.current = false;
         return;
       }
+      if (hostAckTimerRef.current) {
+        clearTimeout(hostAckTimerRef.current);
+        hostAckTimerRef.current = null;
+      }
+      if (hostHeartbeatTimerRef.current) {
+        clearInterval(hostHeartbeatTimerRef.current);
+        hostHeartbeatTimerRef.current = null;
+      }
       setOnlineConnected(false);
       scheduleHostReconnect();
     };
     socket.onerror = () => {
+      if (hostAckTimerRef.current) {
+        clearTimeout(hostAckTimerRef.current);
+        hostAckTimerRef.current = null;
+      }
       setOnlineConnected(false);
       scheduleHostReconnect();
     };
