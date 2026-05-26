@@ -51,6 +51,18 @@ const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a'];
 const AUDIO_TIMEOUT_MS = 7000;
 const DRAW_MAX_TICKS = 10;
 const DRAW_TICK_MS = 45;
+const RENDER_ONLINE_ORIGIN = 'https://bingohouse.onrender.com';
+const getOnlineOrigin = () => {
+  if (typeof window === 'undefined') return RENDER_ONLINE_ORIGIN;
+  if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+    return window.location.origin;
+  }
+  return RENDER_ONLINE_ORIGIN;
+};
+const getOnlineWebSocketUrl = () => {
+  const origin = getOnlineOrigin();
+  return `${origin.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')}/ws`;
+};
 const VOICE_OPTIONS = [
   { id: 3, label: 'Masculina', desc: 'Números e rimas' },
   { id: 8, label: 'Masculina #2', desc: 'Apenas números' },
@@ -263,7 +275,7 @@ export default function BingoWebOSMaster() {
   const canStartOnlineGame = onlinePlayers.length >= 2 && onlineReadyCount === onlinePlayers.length;
   const mobileCardUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    const url = new URL(window.location.href);
+    const url = new URL(getOnlineOrigin());
     url.search = '';
     url.searchParams.set('cartela', 'mobile');
     url.searchParams.set('sala', onlineRoomCode);
@@ -271,8 +283,7 @@ export default function BingoWebOSMaster() {
   }, [onlineRoomCode]);
   const webSocketUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}/ws`;
+    return getOnlineWebSocketUrl();
   }, []);
 
   useEffect(() => {

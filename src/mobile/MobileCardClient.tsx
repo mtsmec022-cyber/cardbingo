@@ -47,6 +47,14 @@ const isStandaloneApp = () => (
   || (window.navigator as any).standalone === true
 );
 const isIosLike = () => /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+const RENDER_ONLINE_ORIGIN = 'https://bingohouse.onrender.com';
+const getOnlineWebSocketUrl = () => {
+  if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/ws`;
+  }
+  return `${RENDER_ONLINE_ORIGIN.replace(/^https:/, 'wss:')}/ws`;
+};
 
 export default function MobileCardClient() {
   const [screen, setScreen] = useState<'home' | 'select' | 'card'>('home');
@@ -72,8 +80,7 @@ export default function MobileCardClient() {
   const selectedCard = cardOptions[cardIndex];
 
   const webSocketUrl = useMemo(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}/ws`;
+    return getOnlineWebSocketUrl();
   }, []);
 
   const stopScanner = useCallback(() => {
