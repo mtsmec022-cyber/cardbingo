@@ -8,6 +8,9 @@
   "appDescription": "Sorteador de bingo otimizado para TV LG webOS.",
   "icon": "icon.png",
   "largeIcon": "largeIcon.png",
+  "bgImage": "images/bgImage.png",
+  "splashBackground": "images/splashBackground.png",
+  "splashColor": "#f4b321",
   "resolution": "1920x1080",
   "uiRevision": 2
 }
