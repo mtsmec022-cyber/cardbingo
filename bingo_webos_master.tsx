@@ -48,10 +48,23 @@ const PATTERNS_90 = [
 ];
 
 const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a'];
-const AUDIO_TIMEOUT_MS = 7000;
+const AUDIO_TIMEOUT_MS = 2600;
+const AUDIO_END_SLACK_MS = 700;
+const START_ANNOUNCEMENT_GAP_MS = 350;
 const DRAW_MAX_TICKS = 10;
 const DRAW_TICK_MS = 45;
+const MANUAL_DRAW_MAX_TICKS = 4;
+const MANUAL_DRAW_TICK_MS = 28;
+const MANUAL_DRAW_INTERVAL_MS = 140;
+const GAMEPAD_POLL_MS = 120;
 const RENDER_ONLINE_ORIGIN = import.meta.env.VITE_ONLINE_ORIGIN || 'https://bingohouse-cartela.onrender.com';
+const publicAssetPath = (path: string) => {
+  const normalized = path.replace(/^\/+/, '');
+  if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+    return `./${normalized}`;
+  }
+  return `/${normalized}`;
+};
 const getOnlineOrigin = () => {
   if (typeof window === 'undefined') return RENDER_ONLINE_ORIGIN;
   if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
@@ -118,15 +131,15 @@ const numberAudioCandidates = (num: number) => {
   const padded = String(num).padStart(2, '0');
   const names = [String(num), padded, `n${num}`, `n${padded}`, `numero-${num}`, `numero_${num}`, `bola-${num}`, `bola_${num}`];
 
-  return names.flatMap(name => AUDIO_EXTENSIONS.map(ext => `/audios/${name}.${ext}`));
+  return names.flatMap(name => AUDIO_EXTENSIONS.map(ext => publicAssetPath(`audios/${name}.${ext}`)));
 };
 
 const voiceNumberAudioCandidates = (num: number, gameType: string, voiceId: number) => [
-  `/voices/${voiceId}/${gameType === '75' ? '75' : '90'}/${num}.mp3`,
+  publicAssetPath(`voices/${voiceId}/${gameType === '75' ? '75' : '90'}/${num}.mp3`),
 ];
 
 const voicePhraseAudioCandidates = (phrase: string, voiceId: number) => [
-  `/voices/${voiceId}/phrases/${phrase}.mp3`,
+  publicAssetPath(`voices/${voiceId}/phrases/${phrase}.mp3`),
 ];
 
 const sfxAudioCandidates = (name: string) => {
@@ -134,8 +147,8 @@ const sfxAudioCandidates = (name: string) => {
   const names = [name, underscored, `sfx-${name}`, `sfx_${underscored}`];
 
   return names.flatMap(fileName => [
-    ...AUDIO_EXTENSIONS.map(ext => `/assets/sfx/${fileName}.${ext}`),
-    ...AUDIO_EXTENSIONS.map(ext => `/assets/${fileName}.${ext}`),
+    ...AUDIO_EXTENSIONS.map(ext => publicAssetPath(`assets/sfx/${fileName}.${ext}`)),
+    ...AUDIO_EXTENSIONS.map(ext => publicAssetPath(`assets/${fileName}.${ext}`)),
   ]);
 };
 
@@ -202,6 +215,38 @@ const BingoValidationOverlay = React.memo(function BingoValidationOverlay({ stat
   );
 });
 
+const ExitConfirmModal = React.memo(function ExitConfirmModal({ onCancel, onConfirm, context, containerRef, cancelRef, confirmRef }) {
+  const isGameplay = context === 'game';
+
+  return (
+    <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/82 animate-in fade-in webos-modal-backdrop">
+      <div ref={containerRef} className="relative overflow-hidden text-center bg-[linear-gradient(180deg,#0f172a,#020617)] border border-white/8 rounded-[1.75rem] px-10 py-9 min-w-[560px] max-w-[620px] shadow-[0_16px_48px_rgba(0,0,0,0.42)]">
+        <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/55 to-transparent" />
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full border border-amber-300/20 bg-amber-400/8">
+          <ArrowLeft className="h-7 w-7 text-amber-300" />
+        </div>
+        <div className="text-3xl font-black uppercase tracking-[0.14em] text-white">
+          {isGameplay ? 'Encerrar e Sair?' : 'Sair do Bingo House?'}
+        </div>
+        <div className="mt-4 text-slate-300 text-base font-bold uppercase tracking-[0.14em] leading-relaxed">
+          {isGameplay ? 'O sorteio vai ser interrompido nesta TV.' : 'Deseja realmente fechar o aplicativo agora?'}
+        </div>
+        <div className="mt-2 text-slate-500 text-sm font-black uppercase tracking-[0.16em]">
+          {isGameplay ? 'Você pode continuar depois abrindo o app de novo.' : 'Pressione cancelar para continuar navegando.'}
+        </div>
+        <div className="mt-8 flex justify-center gap-4">
+          <button ref={cancelRef} onClick={onCancel} className="min-w-[180px] px-8 py-4 bg-slate-800 text-white rounded-full font-black text-lg uppercase border border-slate-700 focus:outline-none focus:ring-6 focus:ring-white focus:scale-105 transition-all">
+            Cancelar
+          </button>
+          <button ref={confirmRef} onClick={onConfirm} className="min-w-[180px] px-8 py-4 bg-gradient-to-r from-rose-600 to-orange-500 text-white rounded-full font-black text-lg uppercase shadow-[0_0_18px_rgba(244,63,94,0.18)] focus:outline-none focus:ring-6 focus:ring-white focus:scale-105 transition-all">
+            Sair
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export default function BingoWebOSMaster() {
   const [currentScreen, setCurrentScreen] = useState('menu');
   
@@ -229,20 +274,29 @@ export default function BingoWebOSMaster() {
   const [onlineGameMode, setOnlineGameMode] = useState(false);
   const [validationOverlay, setValidationOverlay] = useState(null);
   const [bingoWinner, setBingoWinner] = useState(null);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
   
   const autoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const announcementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const manualDrawCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const manualDrawButtonRef = useRef<HTMLButtonElement | null>(null);
+  const autoPlayButtonRef = useRef<HTMLButtonElement | null>(null);
   const startButtonRef = useRef<HTMLButtonElement | null>(null);
+  const exitModalRef = useRef<HTMLDivElement | null>(null);
+  const exitCancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const exitConfirmButtonRef = useRef<HTMLButtonElement | null>(null);
   const countdownActiveRef = useRef(false);
   const drawInProgressRef = useRef(false);
   const audioQueueRef = useRef(Promise.resolve());
   const audioSourceCacheRef = useRef(new Map<string, string | null>());
+  const audioElementCacheRef = useRef(new Map<string, HTMLAudioElement>());
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const hostSocketRef = useRef<WebSocket | null>(null);
   const bingoClaimHandlerRef = useRef(null);
+  const gamepadPressedRef = useRef<Record<string, boolean>>({});
+  const [manualDrawCoolingDown, setManualDrawCoolingDown] = useState(false);
 
   const currentGameConfig = settings.gameType === '75' ? GAME_TYPES.BINGO_75 : GAME_TYPES.BINGO_90;
   const currentPatterns = settings.gameType === '75' ? PATTERNS_75 : PATTERNS_90;
@@ -344,21 +398,22 @@ export default function BingoWebOSMaster() {
   }, [mobileCardUrl]);
 
   useEffect(() => {
-    if (currentScreen === 'game' && drawnBalls.length > 0 && !isPlaying && !isDrawing && !isVoicePlaying && !showBingoCelebration) {
+    if (!showExitConfirm && currentScreen === 'game' && drawnBalls.length > 0 && !isPlaying && !isDrawing && !isVoicePlaying && !showBingoCelebration) {
       manualDrawButtonRef.current?.focus();
     }
-  }, [currentScreen, drawnBalls.length, isPlaying, isDrawing, isVoicePlaying, showBingoCelebration]);
+  }, [currentScreen, drawnBalls.length, isPlaying, isDrawing, isVoicePlaying, showBingoCelebration, showExitConfirm]);
 
   useEffect(() => {
-    if (currentScreen === 'game' && drawnBalls.length === 0 && startCountdown === null && !startAnnouncement && !isDrawing) {
+    if (!showExitConfirm && currentScreen === 'game' && drawnBalls.length === 0 && startCountdown === null && !startAnnouncement && !isDrawing) {
       requestAnimationFrame(() => startButtonRef.current?.focus());
     }
-  }, [currentScreen, drawnBalls.length, startAnnouncement, startCountdown, isDrawing]);
+  }, [currentScreen, drawnBalls.length, startAnnouncement, startCountdown, isDrawing, showExitConfirm]);
 
   useEffect(() => {
     return () => {
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
       if (announcementTimerRef.current) clearTimeout(announcementTimerRef.current);
+      if (manualDrawCooldownTimerRef.current) clearTimeout(manualDrawCooldownTimerRef.current);
       activeAudioRef.current?.pause();
       countdownActiveRef.current = false;
       drawInProgressRef.current = false;
@@ -370,89 +425,147 @@ export default function BingoWebOSMaster() {
       activeAudioRef.current?.pause();
       setIsVoicePlaying(false);
     }
+
+    if (settings.soundEnabled && manualDrawCooldownTimerRef.current) {
+      clearTimeout(manualDrawCooldownTimerRef.current);
+      manualDrawCooldownTimerRef.current = null;
+      setManualDrawCoolingDown(false);
+    }
   }, [settings.soundEnabled]);
 
+  const warmAudioSource = useCallback((source: string) => {
+    if (audioElementCacheRef.current.has(source)) return audioElementCacheRef.current.get(source);
+
+    const audio = new Audio(source);
+    audio.preload = 'auto';
+    audioElementCacheRef.current.set(source, audio);
+    try {
+      audio.load();
+    } catch {
+      undefined;
+    }
+    return audio;
+  }, []);
+
   useEffect(() => {
-    const getFocusableButtons = () => (
-      Array.from(document.querySelectorAll('button:not(:disabled)')) as HTMLButtonElement[]
-    ).filter((button) => {
+    if (!settings.soundEnabled) return;
+
+    const phrases = ['start', 'end', 'bingo', 'bingo-ok', 'win-bingo', 'bad-bingo1', 'bad-bingo2'];
+    const sources = [
+      ...phrases.flatMap(phrase => voicePhraseAudioCandidates(phrase, settings.voiceId)),
+      ...Array.from({ length: TOTAL_BALLS }, (_, index) => index + 1)
+        .flatMap(num => voiceNumberAudioCandidates(num, settings.gameType, settings.voiceId)),
+    ];
+
+    let cancelled = false;
+    let index = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const warmChunk = () => {
+      if (cancelled) return;
+      const limit = Math.min(index + 8, sources.length);
+      for (; index < limit; index++) warmAudioSource(sources[index]);
+      if (index < sources.length) timer = setTimeout(warmChunk, 70);
+    };
+
+    timer = setTimeout(warmChunk, 250);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [settings.soundEnabled, settings.gameType, settings.voiceId, TOTAL_BALLS, warmAudioSource]);
+
+  useEffect(() => {
+    if (!showExitConfirm) return;
+    requestAnimationFrame(() => exitCancelButtonRef.current?.focus());
+  }, [showExitConfirm]);
+
+  const getFocusableButtons = useCallback(() => {
+    const scope = showExitConfirm && exitModalRef.current
+      ? exitModalRef.current
+      : document;
+
+    return (Array.from(scope.querySelectorAll('button:not(:disabled)')) as HTMLButtonElement[]).filter((button) => {
       const rect = button.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     });
+  }, [showExitConfirm]);
 
-    const moveFocus = (direction: 'up' | 'down' | 'left' | 'right') => {
-      const buttons = getFocusableButtons();
-      const active = document.activeElement as HTMLButtonElement | null;
-      const current = active && buttons.includes(active) ? active : buttons[0];
-      if (!current) return;
+  const moveFocus = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
+    const buttons = getFocusableButtons();
+    const active = document.activeElement as HTMLButtonElement | null;
+    const current = active && buttons.includes(active) ? active : buttons[0];
+    if (!current) return;
 
-      const currentRect = current.getBoundingClientRect();
-      const currentCenter = {
-        x: currentRect.left + currentRect.width / 2,
-        y: currentRect.top + currentRect.height / 2,
-      };
-
-      const candidates = buttons
-        .filter((button) => button !== current)
-        .map((button) => {
-          const rect = button.getBoundingClientRect();
-          const center = {
-            x: rect.left + rect.width / 2,
-            y: rect.top + rect.height / 2,
-          };
-          const dx = center.x - currentCenter.x;
-          const dy = center.y - currentCenter.y;
-
-          if (direction === 'left' && dx >= -8) return null;
-          if (direction === 'right' && dx <= 8) return null;
-          if (direction === 'up' && dy >= -8) return null;
-          if (direction === 'down' && dy <= 8) return null;
-
-          const primary = direction === 'left' || direction === 'right' ? Math.abs(dx) : Math.abs(dy);
-          const secondary = direction === 'left' || direction === 'right' ? Math.abs(dy) : Math.abs(dx);
-
-          return { button, score: primary + secondary * 2 };
-        })
-        .filter(Boolean) as { button: HTMLButtonElement; score: number }[];
-
-      candidates.sort((a, b) => a.score - b.score);
-      candidates[0]?.button.focus();
+    const currentRect = current.getBoundingClientRect();
+    const currentCenter = {
+      x: currentRect.left + currentRect.width / 2,
+      y: currentRect.top + currentRect.height / 2,
     };
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      const keyCode = event.keyCode;
-      const keyMap: Record<string, 'up' | 'down' | 'left' | 'right'> = {
-        ArrowUp: 'up',
-        ArrowDown: 'down',
-        ArrowLeft: 'left',
-        ArrowRight: 'right',
-      };
+    const candidates = buttons
+      .filter((button) => button !== current)
+      .map((button) => {
+        const rect = button.getBoundingClientRect();
+        const center = {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        };
+        const dx = center.x - currentCenter.x;
+        const dy = center.y - currentCenter.y;
 
-      if (keyMap[event.key]) {
-        event.preventDefault();
-        moveFocus(keyMap[event.key]);
-        return;
-      }
+        if (direction === 'left' && dx >= -8) return null;
+        if (direction === 'right' && dx <= 8) return null;
+        if (direction === 'up' && dy >= -8) return null;
+        if (direction === 'down' && dy <= 8) return null;
 
-      if (event.key === 'Enter' || keyCode === 13) {
-        event.preventDefault();
-        (document.activeElement as HTMLButtonElement | null)?.click?.();
-        return;
-      }
+        const primary = direction === 'left' || direction === 'right' ? Math.abs(dx) : Math.abs(dy);
+        const secondary = direction === 'left' || direction === 'right' ? Math.abs(dy) : Math.abs(dx);
+        const alignedBonus = secondary < 30 ? -80 : secondary < 80 ? -25 : 0;
 
-      if (event.key === 'Escape' || event.key === 'Backspace' || keyCode === 461 || keyCode === 10009) {
-        event.preventDefault();
-        if (showBingoCelebration) {
-          setShowBingoCelebration(false);
-          return;
-        }
-        if (currentScreen !== 'menu') setCurrentScreen('menu');
-      }
-    };
+        return { button, score: primary + secondary * 2 + alignedBonus };
+      })
+      .filter(Boolean) as { button: HTMLButtonElement; score: number }[];
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [currentScreen, showBingoCelebration]);
+    candidates.sort((a, b) => a.score - b.score);
+    candidates[0]?.button.focus();
+  }, [getFocusableButtons]);
+
+  const goBack = useCallback(() => {
+    if (showExitConfirm) {
+      setShowExitConfirm(false);
+      return;
+    }
+
+    if (showBingoCelebration) {
+      setShowBingoCelebration(false);
+      return;
+    }
+
+    if (currentScreen === 'menu') {
+      setShowExitConfirm(true);
+      return;
+    }
+
+    if (currentScreen === 'game') {
+      setIsPlaying(false);
+      setShowExitConfirm(false);
+      setCurrentScreen('menu');
+      return;
+    }
+
+    if (currentScreen !== 'menu') setCurrentScreen('menu');
+  }, [currentScreen, showBingoCelebration, showExitConfirm]);
+
+  const requestExitApp = useCallback(() => {
+    setShowExitConfirm(false);
+    try {
+      window.close();
+    } catch {
+      undefined;
+    }
+  }, []);
 
   const getBallInfo = (num) => {
     if (!num) return null;
@@ -495,6 +608,22 @@ export default function BingoWebOSMaster() {
     }));
   }, [onlineRoomCode]);
 
+  const lockManualDraw = useCallback(() => {
+    if (manualDrawCooldownTimerRef.current) clearTimeout(manualDrawCooldownTimerRef.current);
+    setManualDrawCoolingDown(true);
+    manualDrawCooldownTimerRef.current = setTimeout(() => {
+      setManualDrawCoolingDown(false);
+      manualDrawCooldownTimerRef.current = null;
+    }, MANUAL_DRAW_INTERVAL_MS);
+  }, []);
+
+  const interruptActiveVoice = useCallback(() => {
+    audioQueueRef.current = Promise.resolve();
+    activeAudioRef.current?.pause();
+    activeAudioRef.current = null;
+    setIsVoicePlaying(false);
+  }, []);
+
   const playAudioCandidates = useCallback((cacheKey: string, candidates: string[], volume = 1) => {
     if (!settings.soundEnabled) return Promise.resolve(false);
 
@@ -511,14 +640,20 @@ export default function BingoWebOSMaster() {
       }
 
       return new Promise((resolve) => {
-        const audio = new Audio(source);
+        const audio = warmAudioSource(source) ?? new Audio(source);
         let settled = false;
-        const timeout = window.setTimeout(() => finish(false), AUDIO_TIMEOUT_MS);
+        let timeout = window.setTimeout(() => finish(false), AUDIO_TIMEOUT_MS);
+        let watchdog: ReturnType<typeof setInterval> | null = null;
 
         const cleanup = () => {
           window.clearTimeout(timeout);
+          if (watchdog) window.clearInterval(watchdog);
           audio.onended = null;
           audio.onerror = null;
+          audio.onabort = null;
+          audio.onstalled = null;
+          audio.onloadedmetadata = null;
+          audio.onpause = null;
         };
 
         const finish = (ok: boolean) => {
@@ -535,18 +670,34 @@ export default function BingoWebOSMaster() {
           resolve(trySource(index + 1));
         };
 
-        audio.preload = 'auto';
         audio.volume = volume;
-        activeAudioRef.current?.pause();
+        if (activeAudioRef.current && activeAudioRef.current !== audio) activeAudioRef.current.pause();
         activeAudioRef.current = audio;
+        try {
+          audio.currentTime = 0;
+        } catch {
+          undefined;
+        }
+        audio.onloadedmetadata = () => {
+          if (Number.isFinite(audio.duration) && audio.duration > 0) {
+            window.clearTimeout(timeout);
+            timeout = window.setTimeout(() => finish(true), Math.max(AUDIO_TIMEOUT_MS, audio.duration * 1000 + AUDIO_END_SLACK_MS));
+          }
+        };
         audio.onended = () => finish(true);
         audio.onerror = () => finish(false);
+        audio.onabort = () => finish(false);
+        audio.onstalled = () => finish(audio.currentTime > 0 && audio.duration > 0 && audio.currentTime >= audio.duration - 0.08);
+        audio.onpause = () => finish(true);
+        watchdog = window.setInterval(() => {
+          if (audio.duration > 0 && audio.currentTime >= audio.duration - 0.08) finish(true);
+        }, 120);
         audio.play().catch(() => finish(false));
       });
     };
 
     return trySource(0);
-  }, [settings.soundEnabled]);
+  }, [settings.soundEnabled, warmAudioSource]);
 
   const enqueueAudio = useCallback((task: () => Promise<unknown> | unknown) => {
     audioQueueRef.current = audioQueueRef.current
@@ -591,6 +742,14 @@ export default function BingoWebOSMaster() {
   }, [settings.soundEnabled]);
 
   const playSfxWithFallback = useCallback(async (name: string, fallbackType: 'tick' | 'start' | 'reveal', volume = 0.8) => {
+    const cacheKey = `sfx:${name}`;
+    const cached = audioSourceCacheRef.current.get(cacheKey);
+
+    if (!cached) {
+      playSyntheticSfx(fallbackType, Math.min(volume, 0.5));
+      return false;
+    }
+
     const played = await playSfx(name, volume);
     if (!played) playSyntheticSfx(fallbackType, Math.min(volume, 0.5));
     return played;
@@ -701,8 +860,7 @@ export default function BingoWebOSMaster() {
         activeAudioRef.current?.pause();
 
         try {
-          const playedRevealSfx = await playAudioCandidates('sfx:ball-reveal', sfxAudioCandidates('ball-reveal'), 0.55);
-          if (!playedRevealSfx) playSyntheticSfx('reveal', 0.35);
+          await playSfxWithFallback('ball-reveal', 'reveal', 0.55);
           await playAudioCandidates(
             `number:${settings.voiceId}:${settings.gameType}:${num}`,
             [
@@ -724,9 +882,9 @@ export default function BingoWebOSMaster() {
         }
       });
     }
-  }, [enqueueAudio, playAudioCandidates, playSyntheticSfx, settings.soundEnabled, settings.gameType, settings.voiceId, currentGameConfig.layout]);
+  }, [enqueueAudio, playAudioCandidates, playSfxWithFallback, settings.soundEnabled, settings.gameType, settings.voiceId, currentGameConfig.layout]);
 
-  const executeDraw = useCallback(() => {
+  const runDrawAnimation = useCallback((maxTicks: number, tickMs: number) => {
     if (drawInProgressRef.current || isDrawing || startCountdown !== null || startAnnouncement || drawnBalls.length >= TOTAL_BALLS) return;
     
     drawInProgressRef.current = true;
@@ -743,7 +901,7 @@ export default function BingoWebOSMaster() {
       setDisplayNumber(randomVisual);
       ticks++;
       
-      if (ticks >= DRAW_MAX_TICKS) {
+      if (ticks >= maxTicks) {
         clearInterval(shuffleInterval);
         setDisplayNumber(finalBall);
         setDrawnBalls(prev => [...prev, finalBall]);
@@ -753,9 +911,108 @@ export default function BingoWebOSMaster() {
         setIsDrawing(false);
         drawInProgressRef.current = false;
       }
-    }, DRAW_TICK_MS);
+    }, tickMs);
 
-  }, [drawnBalls, drawnBallSet, isDrawing, publishDrawnBall, startAnnouncement, startCountdown, TOTAL_BALLS, speakBall]);
+  }, [TOTAL_BALLS, drawnBalls, drawnBallSet, isDrawing, publishDrawnBall, startAnnouncement, startCountdown, speakBall]);
+
+  const executeDraw = useCallback(() => {
+    runDrawAnimation(DRAW_MAX_TICKS, DRAW_TICK_MS);
+  }, [runDrawAnimation]);
+
+  const executeManualDraw = useCallback(() => {
+    runDrawAnimation(MANUAL_DRAW_MAX_TICKS, MANUAL_DRAW_TICK_MS);
+  }, [runDrawAnimation]);
+
+  const triggerManualDraw = useCallback(() => {
+    if (isPlaying || isDrawing || drawInProgressRef.current || startCountdown !== null || startAnnouncement || drawnBalls.length === 0 || drawnBalls.length >= TOTAL_BALLS) return;
+    if (manualDrawCoolingDown) return;
+
+    if (settings.soundEnabled && isVoicePlaying) interruptActiveVoice();
+    lockManualDraw();
+    executeManualDraw();
+  }, [TOTAL_BALLS, drawnBalls.length, executeManualDraw, interruptActiveVoice, isDrawing, isPlaying, isVoicePlaying, lockManualDraw, manualDrawCoolingDown, settings.soundEnabled, startAnnouncement, startCountdown]);
+
+  const toggleAutoPlay = useCallback(() => {
+    if (drawnBalls.length === 0 || isDrawing || startCountdown !== null || startAnnouncement || drawnBalls.length >= TOTAL_BALLS) return;
+    setIsPlaying((value) => !value);
+  }, [TOTAL_BALLS, drawnBalls.length, isDrawing, startAnnouncement, startCountdown]);
+
+  const handleBingo = useCallback(() => {
+    setIsPlaying(false);
+    setBingoWinner(null);
+    setShowBingoCelebration(true);
+    enqueueAudio(async () => {
+      setIsVoicePlaying(true);
+      activeAudioRef.current?.pause();
+
+      try {
+        await playAudioCandidates(
+          `phrase:${settings.voiceId}:bingo`,
+          [
+            ...voicePhraseAudioCandidates('bingo', settings.voiceId),
+            ...sfxAudioCandidates('bingo'),
+          ],
+          0.95
+        );
+      } finally {
+        setIsVoicePlaying(false);
+      }
+    });
+  }, [enqueueAudio, playAudioCandidates, settings.voiceId]);
+
+  useEffect(() => {
+    const triggerFocusedButton = () => {
+      (document.activeElement as HTMLButtonElement | null)?.click?.();
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const keyCode = event.keyCode;
+      const keyMap: Record<string, 'up' | 'down' | 'left' | 'right'> = {
+        ArrowUp: 'up',
+        ArrowDown: 'down',
+        ArrowLeft: 'left',
+        ArrowRight: 'right',
+      };
+
+      if (keyMap[event.key]) {
+        event.preventDefault();
+        moveFocus(keyMap[event.key]);
+        return;
+      }
+
+      if (event.key === 'Enter' || keyCode === 13) {
+        event.preventDefault();
+        triggerFocusedButton();
+        return;
+      }
+
+      if (keyCode === 404 && currentScreen === 'game') {
+        event.preventDefault();
+        triggerManualDraw();
+        return;
+      }
+
+      if (keyCode === 405 && currentScreen === 'game') {
+        event.preventDefault();
+        toggleAutoPlay();
+        return;
+      }
+
+      if (keyCode === 403 && currentScreen === 'game') {
+        event.preventDefault();
+        handleBingo();
+        return;
+      }
+
+      if (event.key === 'Escape' || event.key === 'Backspace' || keyCode === 461 || keyCode === 10009) {
+        event.preventDefault();
+        goBack();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [currentScreen, goBack, handleBingo, moveFocus, toggleAutoPlay, triggerManualDraw]);
 
   const executeInitialDraw = useCallback(() => {
     if (drawInProgressRef.current || isDrawing || drawnBalls.length >= TOTAL_BALLS) return;
@@ -801,27 +1058,30 @@ export default function BingoWebOSMaster() {
       setStartCountdown((current) => {
         if (current === null) return null;
 
-        if (current <= 1) {
-          if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-          setStartAnnouncement(true);
-          const startPhrase = playVoicePhrase('start', 1);
-          const minimumAnnouncementTime = new Promise(resolve => {
-            announcementTimerRef.current = setTimeout(resolve, 2000);
-          });
+          if (current <= 1) {
+            if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+            setStartAnnouncement(true);
+            const waitForStartSequence = settings.soundEnabled
+              ? playVoicePhrase('start', 1).then(() => new Promise(resolve => {
+                  announcementTimerRef.current = setTimeout(resolve, START_ANNOUNCEMENT_GAP_MS);
+                }))
+              : new Promise(resolve => {
+                  announcementTimerRef.current = setTimeout(resolve, 650);
+                });
 
-          Promise.all([startPhrase, minimumAnnouncementTime]).finally(() => {
-            setStartAnnouncement(false);
-            countdownActiveRef.current = false;
-            requestAnimationFrame(() => executeInitialDraw());
-          });
-          return null;
-        }
+            waitForStartSequence.finally(() => {
+              setStartAnnouncement(false);
+              countdownActiveRef.current = false;
+              requestAnimationFrame(() => executeInitialDraw());
+            });
+            return null;
+          }
 
         playSfxWithFallback('countdown-tick', 'tick', 0.6);
         return current - 1;
       });
     }, 1000);
-  }, [drawnBalls.length, executeInitialDraw, isDrawing, playSfxWithFallback, playVoicePhrase, startAnnouncement, startCountdown]);
+  }, [drawnBalls.length, executeInitialDraw, isDrawing, playSfxWithFallback, playVoicePhrase, settings.soundEnabled, startAnnouncement, startCountdown]);
 
   useEffect(() => {
     if (isPlaying && !isDrawing && !isVoicePlaying && drawnBalls.length < TOTAL_BALLS) {
@@ -832,7 +1092,47 @@ export default function BingoWebOSMaster() {
     return () => clearTimeout(autoPlayTimerRef.current);
   }, [isPlaying, isDrawing, isVoicePlaying, drawnBalls.length, TOTAL_BALLS, settings.autoSpeed, executeDraw]);
 
-  const toggleAutoPlay = () => setIsPlaying(!isPlaying);
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return;
+
+    const getGamepadButton = (gamepad: Gamepad, index: number) => Boolean(gamepad.buttons[index]?.pressed);
+    const getAxisPressed = (value: number | undefined, negative: boolean) => negative ? (value ?? 0) <= -0.55 : (value ?? 0) >= 0.55;
+
+    const runActionOnce = (key: string, pressed: boolean, action: () => void) => {
+      const wasPressed = gamepadPressedRef.current[key];
+      if (pressed && !wasPressed) action();
+      gamepadPressedRef.current[key] = pressed;
+    };
+
+    const interval = window.setInterval(() => {
+      const [gamepad] = navigator.getGamepads();
+      if (!gamepad) {
+        gamepadPressedRef.current = {};
+        return;
+      }
+
+      runActionOnce('up', getGamepadButton(gamepad, 12) || getAxisPressed(gamepad.axes[1], true), () => moveFocus('up'));
+      runActionOnce('down', getGamepadButton(gamepad, 13) || getAxisPressed(gamepad.axes[1], false), () => moveFocus('down'));
+      runActionOnce('left', getGamepadButton(gamepad, 14) || getAxisPressed(gamepad.axes[0], true), () => moveFocus('left'));
+      runActionOnce('right', getGamepadButton(gamepad, 15) || getAxisPressed(gamepad.axes[0], false), () => moveFocus('right'));
+      runActionOnce('confirm', getGamepadButton(gamepad, 0), () => {
+        if (currentScreen === 'game') {
+          triggerManualDraw();
+          return;
+        }
+        (document.activeElement as HTMLButtonElement | null)?.click?.();
+      });
+      runActionOnce('bingo', getGamepadButton(gamepad, 2), () => {
+        if (currentScreen === 'game') handleBingo();
+      });
+      runActionOnce('auto', getGamepadButton(gamepad, 3), () => {
+        if (currentScreen === 'game') toggleAutoPlay();
+      });
+      runActionOnce('back', getGamepadButton(gamepad, 1) || getGamepadButton(gamepad, 8) || getGamepadButton(gamepad, 9), goBack);
+    }, GAMEPAD_POLL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [currentScreen, goBack, handleBingo, moveFocus, toggleAutoPlay, triggerManualDraw]);
 
   // Mudar tipo de jogo reinicia tudo
   const handleGameTypeChange = (type) => {
@@ -845,35 +1145,15 @@ export default function BingoWebOSMaster() {
     setIsVoicePlaying(false);
     setStartCountdown(null);
     setStartAnnouncement(false);
+    setManualDrawCoolingDown(false);
+    if (manualDrawCooldownTimerRef.current) clearTimeout(manualDrawCooldownTimerRef.current);
+    manualDrawCooldownTimerRef.current = null;
     if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
     if (announcementTimerRef.current) clearTimeout(announcementTimerRef.current);
     activeAudioRef.current?.pause();
     countdownActiveRef.current = false;
     drawInProgressRef.current = false;
     setPatternIndex(0);
-  };
-
-  const handleBingo = () => {
-    setIsPlaying(false);
-    setBingoWinner(null);
-    setShowBingoCelebration(true);
-    enqueueAudio(async () => {
-      setIsVoicePlaying(true);
-      activeAudioRef.current?.pause();
-
-      try {
-        await playAudioCandidates(
-          `phrase:${settings.voiceId}:bingo`,
-          [
-            ...voicePhraseAudioCandidates('bingo', settings.voiceId),
-            ...sfxAudioCandidates('bingo'),
-          ],
-          0.95
-        );
-      } finally {
-        setIsVoicePlaying(false);
-      }
-    });
   };
 
   const handleVerifyBingo = useCallback(() => {
@@ -893,6 +1173,9 @@ export default function BingoWebOSMaster() {
     setIsVoicePlaying(false);
     setStartCountdown(null);
     setStartAnnouncement(false);
+    setManualDrawCoolingDown(false);
+    if (manualDrawCooldownTimerRef.current) clearTimeout(manualDrawCooldownTimerRef.current);
+    manualDrawCooldownTimerRef.current = null;
     setShowBingoCelebration(false);
     setBingoWinner(null);
     setCurrentScreen('menu');
@@ -1220,11 +1503,21 @@ export default function BingoWebOSMaster() {
     const isStartingSequence = isStartingCountdown || startAnnouncement;
     const minimumBingoBalls = minimumBallsForPattern(settings.gameType, patternIndex);
     const canRequestBingo = drawnBalls.length >= minimumBingoBalls;
-    const gameControlsDisabled = !hasGameStarted || isStartingSequence || isVoicePlaying;
+    const gameControlsDisabled = !hasGameStarted || isStartingSequence;
 
     return (
       <div className="flex-1 flex flex-col h-full animate-in zoom-in-95 duration-500 relative">
         <BingoValidationOverlay state={validationOverlay} />
+        {showExitConfirm && (
+          <ExitConfirmModal
+            context={currentScreen}
+            onCancel={() => setShowExitConfirm(false)}
+            onConfirm={requestExitApp}
+            containerRef={exitModalRef}
+            cancelRef={exitCancelButtonRef}
+            confirmRef={exitConfirmButtonRef}
+          />
+        )}
         
         {showBingoCelebration && (
           <BingoCelebrationModal winner={bingoWinner} onVerify={handleVerifyBingo} onNewGame={handleNewGameFromBingo} />
@@ -1304,8 +1597,8 @@ export default function BingoWebOSMaster() {
 
           <div className="w-[30%] bg-slate-900 border border-slate-800 rounded-3xl p-5 flex flex-col justify-between">
             <div className="flex gap-2 h-16 mb-4">
-              <button ref={manualDrawButtonRef} onClick={executeDraw} disabled={gameControlsDisabled || isPlaying || isDrawing || drawnBalls.length >= TOTAL_BALLS} className="flex-1 bg-emerald-600 text-white font-black text-xl uppercase rounded-xl focus:outline-none focus:ring-4 focus:ring-white transition-all flex items-center justify-center disabled:opacity-50">+1</button>
-              <button onClick={toggleAutoPlay} disabled={gameControlsDisabled || isDrawing || drawnBalls.length >= TOTAL_BALLS} className={`flex-1 flex items-center justify-center gap-2 font-black text-lg uppercase rounded-xl focus:outline-none focus:ring-4 focus:ring-white transition-all disabled:opacity-50 ${isPlaying ? 'bg-amber-500 text-black' : 'bg-slate-800 text-white border-2 border-slate-700'}`}>
+              <button ref={manualDrawButtonRef} onClick={triggerManualDraw} disabled={gameControlsDisabled || isPlaying || isDrawing || manualDrawCoolingDown || drawnBalls.length >= TOTAL_BALLS} className="flex-1 bg-emerald-600 text-white font-black text-xl uppercase rounded-xl focus:outline-none focus:ring-4 focus:ring-white transition-all flex items-center justify-center disabled:opacity-50">+1</button>
+              <button ref={autoPlayButtonRef} onClick={toggleAutoPlay} disabled={gameControlsDisabled || isDrawing || drawnBalls.length >= TOTAL_BALLS} className={`flex-1 flex items-center justify-center gap-2 font-black text-lg uppercase rounded-xl focus:outline-none focus:ring-4 focus:ring-white transition-all disabled:opacity-50 ${isPlaying ? 'bg-amber-500 text-black' : 'bg-slate-800 text-white border-2 border-slate-700'}`}>
                 {isPlaying ? <Pause fill="currentColor"/> : <Play fill="currentColor"/>}
               </button>
             </div>
@@ -1386,6 +1679,16 @@ export default function BingoWebOSMaster() {
 
   return (
     <div className="webos-app w-screen h-screen overflow-hidden bg-black text-slate-200 font-sans p-4 lg:p-6 select-none cursor-default flex flex-col">
+      {showExitConfirm && currentScreen !== 'game' && (
+        <ExitConfirmModal
+          context={currentScreen}
+          onCancel={() => setShowExitConfirm(false)}
+          onConfirm={requestExitApp}
+          containerRef={exitModalRef}
+          cancelRef={exitCancelButtonRef}
+          confirmRef={exitConfirmButtonRef}
+        />
+      )}
       {currentScreen === 'menu' && renderMenu()}
       {currentScreen === 'type' && renderGameType()}
       {currentScreen === 'settings' && renderSettings()}

@@ -657,7 +657,12 @@ export default function MobileCardClient() {
           ) : (
             <div className="text-center">
               <div className="text-slate-500 text-xs font-black uppercase tracking-widest mb-3">Aguardando sorteio</div>
-              <div className="w-20 h-20 rounded-full bg-slate-950 border-4 border-slate-800 mx-auto" />
+              <div className="w-20 h-20 rounded-full bg-slate-950 border-4 border-slate-800 mx-auto flex items-center justify-center shadow-inner shadow-black/40">
+                <svg viewBox="0 0 64 64" aria-hidden="true" className="w-11 h-11 text-slate-500">
+                  <circle cx="32" cy="22" r="10" fill="currentColor" opacity="0.95" />
+                  <path d="M16 51c0-8.837 7.163-16 16-16s16 7.163 16 16" fill="currentColor" opacity="0.95" />
+                </svg>
+              </div>
             </div>
           )}
         </div>

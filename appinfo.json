@@ -12,5 +12,6 @@
   "splashBackground": "images/splashBackground.png",
   "splashColor": "#f4b321",
   "resolution": "1920x1080",
-  "uiRevision": 2
+  "uiRevision": 2,
+  "disableBackHistoryAPI": true
 }
