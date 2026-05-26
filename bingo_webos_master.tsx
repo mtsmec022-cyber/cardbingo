@@ -50,6 +50,10 @@ const PATTERNS_90 = [
 const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a'];
 const AUDIO_TIMEOUT_MS = 2600;
 const AUDIO_END_SLACK_MS = 700;
+const VOICE_NUMBER_PLAYBACK_RATE = 0.96;
+const VOICE_PHRASE_PLAYBACK_RATE = 0.98;
+const VOICE_NUMBER_END_GAP_MS = 180;
+const VOICE_PHRASE_END_GAP_MS = 120;
 const START_ANNOUNCEMENT_GAP_MS = 350;
 const DRAW_MAX_TICKS = 10;
 const DRAW_TICK_MS = 45;
@@ -295,11 +299,14 @@ export default function BingoWebOSMaster() {
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const hostSocketRef = useRef<WebSocket | null>(null);
+  const hostReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bingoClaimHandlerRef = useRef(null);
   const gamepadPressedRef = useRef<Record<string, boolean>>({});
   const audioQueueDepthRef = useRef(0);
   const shuttingDownHostRef = useRef(false);
+  const hostShouldReconnectRef = useRef(false);
   const [manualDrawCoolingDown, setManualDrawCoolingDown] = useState(false);
+  const [hostReconnectNonce, setHostReconnectNonce] = useState(0);
 
   const currentGameConfig = settings.gameType === '75' ? GAME_TYPES.BINGO_75 : GAME_TYPES.BINGO_90;
   const currentPatterns = settings.gameType === '75' ? PATTERNS_75 : PATTERNS_90;
@@ -359,6 +366,11 @@ export default function BingoWebOSMaster() {
   }, []);
 
   const closeHostSession = useCallback((notifyPlayers = false) => {
+    if (hostReconnectTimerRef.current) {
+      clearTimeout(hostReconnectTimerRef.current);
+      hostReconnectTimerRef.current = null;
+    }
+    hostShouldReconnectRef.current = false;
     const socket = hostSocketRef.current;
     hostSocketRef.current = null;
     if (!socket) return;
@@ -375,6 +387,15 @@ export default function BingoWebOSMaster() {
     setOnlinePlayers([]);
   }, [onlineRoomCode]);
 
+  const scheduleHostReconnect = useCallback(() => {
+    if (hostReconnectTimerRef.current || !hostShouldReconnectRef.current) return;
+    hostReconnectTimerRef.current = window.setTimeout(() => {
+      hostReconnectTimerRef.current = null;
+      if (!hostShouldReconnectRef.current) return;
+      setHostReconnectNonce((value) => value + 1);
+    }, 1500);
+  }, []);
+
   useEffect(() => {
     const shouldKeepRoomOpen = currentScreen === 'onlineCards' || (currentScreen === 'game' && onlineGameMode);
     if (!shouldKeepRoomOpen || !webSocketUrl || !isValidRoomCode(onlineRoomCode)) {
@@ -383,6 +404,7 @@ export default function BingoWebOSMaster() {
     }
 
     closeHostSession(false);
+    hostShouldReconnectRef.current = true;
     shuttingDownHostRef.current = false;
     const socket = new WebSocket(webSocketUrl);
     hostSocketRef.current = socket;
@@ -412,13 +434,17 @@ export default function BingoWebOSMaster() {
         return;
       }
       setOnlineConnected(false);
+      scheduleHostReconnect();
     };
-    socket.onerror = () => setOnlineConnected(false);
+    socket.onerror = () => {
+      setOnlineConnected(false);
+      scheduleHostReconnect();
+    };
 
     return () => {
-      if (hostSocketRef.current === socket) closeHostSession(true);
+      if (hostSocketRef.current === socket) closeHostSession(false);
     };
-  }, [closeHostSession, currentScreen, onlineGameMode, onlineRoomCode, webSocketUrl]);
+  }, [closeHostSession, currentScreen, hostReconnectNonce, onlineGameMode, onlineRoomCode, scheduleHostReconnect, webSocketUrl]);
 
   useEffect(() => {
     if (!mobileCardUrl) return;
@@ -674,7 +700,12 @@ export default function BingoWebOSMaster() {
     setIsVoicePlaying(false);
   }, []);
 
-  const playAudioCandidates = useCallback((cacheKey: string, candidates: string[], volume = 1) => {
+  const playAudioCandidates = useCallback((
+    cacheKey: string,
+    candidates: string[],
+    volume = 1,
+    options?: { playbackRate?: number; endGapMs?: number }
+  ) => {
     if (!settings.soundEnabled) return Promise.resolve(false);
 
     const cached = audioSourceCacheRef.current.get(cacheKey);
@@ -713,7 +744,12 @@ export default function BingoWebOSMaster() {
 
           if (ok) {
             audioSourceCacheRef.current.set(cacheKey, source);
-            resolve(true);
+            const endGapMs = options?.endGapMs ?? 0;
+            if (endGapMs > 0) {
+              window.setTimeout(() => resolve(true), endGapMs);
+            } else {
+              resolve(true);
+            }
             return;
           }
 
@@ -721,6 +757,7 @@ export default function BingoWebOSMaster() {
         };
 
         audio.volume = volume;
+        audio.playbackRate = options?.playbackRate ?? 1;
         if (activeAudioRef.current && activeAudioRef.current !== audio) activeAudioRef.current.pause();
         activeAudioRef.current = audio;
         try {
@@ -823,7 +860,8 @@ export default function BingoWebOSMaster() {
         return await playAudioCandidates(
           `phrase:${settings.voiceId}:${phrase}`,
           voicePhraseAudioCandidates(phrase, settings.voiceId),
-          volume
+          volume,
+          { playbackRate: VOICE_PHRASE_PLAYBACK_RATE, endGapMs: VOICE_PHRASE_END_GAP_MS }
         );
       } finally {
         setIsVoicePlaying(false);
@@ -845,7 +883,8 @@ export default function BingoWebOSMaster() {
             ...voicePhraseAudioCandidates('bingo', settings.voiceId),
             ...sfxAudioCandidates('bingo'),
           ],
-          0.95
+          0.95,
+          { playbackRate: VOICE_PHRASE_PLAYBACK_RATE, endGapMs: VOICE_PHRASE_END_GAP_MS }
         );
 
         await playAudioCandidates(
@@ -859,7 +898,8 @@ export default function BingoWebOSMaster() {
                 ...voicePhraseAudioCandidates('bad-bingo1', settings.voiceId),
                 ...voicePhraseAudioCandidates('bad-bingo2', settings.voiceId),
               ],
-          1
+          1,
+          { playbackRate: VOICE_PHRASE_PLAYBACK_RATE, endGapMs: VOICE_PHRASE_END_GAP_MS }
         );
       } finally {
         setIsVoicePlaying(false);
@@ -924,14 +964,16 @@ export default function BingoWebOSMaster() {
               ...voiceNumberAudioCandidates(num, settings.gameType, settings.voiceId),
               ...numberAudioCandidates(num),
             ],
-            1
+            1,
+            { playbackRate: VOICE_NUMBER_PLAYBACK_RATE, endGapMs: VOICE_NUMBER_END_GAP_MS }
           );
 
           if (isLastBall) {
             await playAudioCandidates(
               `phrase:${settings.voiceId}:end`,
               voicePhraseAudioCandidates('end', settings.voiceId),
-              1
+              1,
+              { playbackRate: VOICE_PHRASE_PLAYBACK_RATE, endGapMs: VOICE_PHRASE_END_GAP_MS }
             );
           }
         } finally {
@@ -1009,7 +1051,8 @@ export default function BingoWebOSMaster() {
             ...voicePhraseAudioCandidates('bingo', settings.voiceId),
             ...sfxAudioCandidates('bingo'),
           ],
-          0.95
+          0.95,
+          { playbackRate: VOICE_PHRASE_PLAYBACK_RATE, endGapMs: VOICE_PHRASE_END_GAP_MS }
         );
       } finally {
         setIsVoicePlaying(false);
