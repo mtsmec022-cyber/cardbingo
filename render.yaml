@@ -3,7 +3,7 @@ services:
     name: bingohouse
     runtime: node
     plan: starter
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     startCommand: npm run serve
     autoDeploy: true
     healthCheckPath: /
