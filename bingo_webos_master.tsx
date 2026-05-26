@@ -418,8 +418,16 @@ export default function BingoWebOSMaster() {
       return;
     }
 
-    closeHostSession(false);
     hostShouldReconnectRef.current = true;
+    const existingSocket = hostSocketRef.current;
+    if (
+      existingSocket
+      && (existingSocket.readyState === WebSocket.OPEN || existingSocket.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
+    closeHostSession(false);
     shuttingDownHostRef.current = false;
     const socket = new WebSocket(webSocketUrl);
     hostSocketRef.current = socket;
@@ -491,11 +499,13 @@ export default function BingoWebOSMaster() {
       setOnlineConnected(false);
       scheduleHostReconnect();
     };
-
-    return () => {
-      if (hostSocketRef.current === socket) closeHostSession(false);
-    };
   }, [closeHostSession, currentScreen, hostReconnectNonce, onlineGameMode, onlineRoomCode, scheduleHostReconnect, webSocketUrl]);
+
+  useEffect(() => {
+    return () => {
+      closeHostSession(true);
+    };
+  }, [closeHostSession]);
 
   useEffect(() => {
     if (!mobileCardUrl) return;
